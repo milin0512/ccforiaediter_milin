@@ -111,7 +111,7 @@ main {
   border-left-width: 6px;
   border-radius: var(--radius);
   padding: 12px;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .msg-card__meta {
