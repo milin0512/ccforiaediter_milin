@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>ココフォリアログ編集ツール</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <h1>ココフォリアログ編集ツール</h1>
+  <p class="app-header__lead">読み込む → 編集する → 書き出す</p>
+</header>
+
+<main>
+
+  <!-- ① 読み込みエリア -->
+  <section class="panel" id="section-load">
+    <h2 class="panel__title">① ログを読み込む</h2>
+    <p class="panel__desc">ココフォリアから書き出したHTML、または本ツールで一時保存したHTMLを選んでください。</p>
+    <label class="btn btn--primary btn--block" for="file-input">ファイルを選ぶ</label>
+    <input type="file" id="file-input" accept=".html,text/html" hidden />
+    <p class="load-status" id="load-status">まだファイルが読み込まれていません。</p>
+  </section>
+
+  <!-- ② 編集エリア -->
+  <section class="panel" id="section-editor" hidden>
+    <h2 class="panel__title">② 発言を編集する</h2>
+
+    <div class="editor-toolbar">
+      <button type="button" class="btn btn--primary" id="btn-add-top">＋ 先頭に発言を追加</button>
+      <button type="button" class="btn btn--secondary" id="btn-save-temp">一時保存（HTML）</button>
+    </div>
+
+    <label class="field filter-field">
+      <span class="field__label">表示するダイスロール判定</span>
+      <select id="filter-select">
+        <option value="all">すべて表示</option>
+        <option value="dice">ダイスロールのみ</option>
+        <option value="dice-success">ダイスロール：成功系のみ（クリティカル/イクストリーム成功/ハード成功/レギュラー成功/成功）</option>
+        <option value="dice-failure">ダイスロール：失敗系のみ（失敗/ファンブル）</option>
+        <option value="talk">ダイスロール以外（会話のみ）</option>
+      </select>
+    </label>
+    <p class="filter-note" id="filter-note" hidden>※ 絞り込み中は並べ替え・追加ができません。「すべて表示」に戻すとご利用いただけます。</p>
+
+    <p class="msg-count" id="msg-count"></p>
+
+    <div id="message-list" class="message-list"></div>
+
+    <div class="editor-toolbar">
+      <button type="button" class="btn btn--primary" id="btn-add-bottom">＋ 末尾に発言を追加</button>
+      <button type="button" class="btn btn--secondary" id="btn-save-temp-bottom">一時保存（HTML）</button>
+    </div>
+  </section>
+
+  <!-- ③ 書き出しエリア -->
+  <section class="panel" id="section-export" hidden>
+    <h2 class="panel__title">③ Markdownとして書き出す</h2>
+    <p class="panel__desc">Notionに貼り付けられるMarkdown形式に変換します。</p>
+    <div class="editor-toolbar">
+      <button type="button" class="btn btn--primary btn--block" id="btn-copy-md">Markdownをコピー</button>
+      <button type="button" class="btn btn--secondary btn--block" id="btn-download-md">Markdownをダウンロード</button>
+    </div>
+    <p class="export-status" id="export-status"></p>
+  </section>
+
+</main>
+
+<!-- 発言 追加・編集パネル（オーバーレイ） -->
+<div class="overlay" id="msg-overlay" hidden>
+  <div class="overlay__backdrop" id="msg-overlay-backdrop"></div>
+  <div class="overlay__sheet" role="dialog" aria-modal="true" aria-labelledby="msg-form-title">
+    <h3 id="msg-form-title">発言を編集</h3>
+
+    <form id="msg-form">
+      <label class="field">
+        <span class="field__label">タブ</span>
+        <input type="text" id="field-tab" list="tab-options" placeholder="[main]" required />
+        <datalist id="tab-options"></datalist>
+      </label>
+
+      <label class="field">
+        <span class="field__label">話者</span>
+        <select id="field-speaker-select">
+          <option value="__new__">＋ 新しい話者を登録する</option>
+        </select>
+      </label>
+
+      <div id="new-speaker-block" class="new-speaker-block" hidden>
+        <label class="field">
+          <span class="field__label">新しい話者名</span>
+          <input type="text" id="field-speaker-name" placeholder="話者名を入力" />
+        </label>
+        <div class="field">
+          <span class="field__label">色を選ぶ</span>
+          <div class="color-swatches" id="color-swatches"></div>
+        </div>
+        <label class="field">
+          <span class="field__label">カラーコード（任意）</span>
+          <input type="text" id="field-speaker-color" placeholder="#03a9f4" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field__label">本文</span>
+        <textarea id="field-text" rows="5" placeholder="発言の本文" required></textarea>
+      </label>
+
+      <label class="field field--checkbox">
+        <input type="checkbox" id="field-dice" />
+        <span class="field__label">ダイスロールとして扱う</span>
+      </label>
+
+      <div class="overlay__actions">
+        <button type="button" class="btn btn--secondary btn--block" id="btn-cancel-msg">キャンセル</button>
+        <button type="submit" class="btn btn--primary btn--block" id="btn-submit-msg">保存する</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
