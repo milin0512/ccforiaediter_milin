@@ -247,8 +247,9 @@ const el = {
   overlayBackdrop: document.getElementById("msg-overlay-backdrop"),
   msgForm: document.getElementById("msg-form"),
   msgFormTitle: document.getElementById("msg-form-title"),
-  fieldTab: document.getElementById("field-tab"),
-  tabOptions: document.getElementById("tab-options"),
+  fieldTabSelect: document.getElementById("field-tab-select"),
+  newTabBlock: document.getElementById("new-tab-block"),
+  fieldTabName: document.getElementById("field-tab-name"),
   fieldSpeakerSelect: document.getElementById("field-speaker-select"),
   newSpeakerBlock: document.getElementById("new-speaker-block"),
   fieldSpeakerName: document.getElementById("field-speaker-name"),
@@ -484,9 +485,10 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
   el.msgFormTitle.textContent = mode === "edit" ? "発言を編集" : "発言を追加";
 
   // タブ候補
-  el.tabOptions.innerHTML = getKnownTabs()
-    .map((t) => `<option value="${escapeHtml(t)}"></option>`)
-    .join("");
+  const knownTabs = getKnownTabs();
+  el.fieldTabSelect.innerHTML =
+    knownTabs.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("") +
+    `<option value="__new__">＋ 新しいタブを追加する</option>`;
 
   // 話者候補
   const knownSpeakers = getKnownSpeakers();
@@ -504,9 +506,17 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
   let editingMsg = null;
   if (mode === "edit") {
     editingMsg = state.messages[index];
-    el.fieldTab.value = editingMsg.tab;
     el.fieldText.value = editingMsg.text;
     el.fieldDice.checked = editingMsg.isDiceRoll;
+
+    if (knownTabs.includes(editingMsg.tab)) {
+      el.fieldTabSelect.value = editingMsg.tab;
+      setNewTabBlockVisible(false);
+    } else {
+      el.fieldTabSelect.value = "__new__";
+      el.fieldTabName.value = editingMsg.tab;
+      setNewTabBlockVisible(true);
+    }
 
     const existsInSelect = knownSpeakers.some((s) => s.speaker === editingMsg.speaker);
     if (existsInSelect) {
@@ -520,9 +530,16 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
       selectColorSwatch(editingMsg.color);
     }
   } else {
-    el.fieldTab.value = getKnownTabs()[0] || "[main]";
     el.fieldText.value = "";
     el.fieldDice.checked = false;
+    el.fieldTabName.value = "";
+    if (knownTabs.length > 0) {
+      el.fieldTabSelect.value = knownTabs[0];
+      setNewTabBlockVisible(false);
+    } else {
+      el.fieldTabSelect.value = "__new__";
+      setNewTabBlockVisible(true);
+    }
     el.fieldSpeakerName.value = "";
     el.fieldSpeakerColor.value = "";
     if (knownSpeakers.length > 0) {
@@ -535,6 +552,10 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
   }
 
   el.overlay.hidden = false;
+}
+
+function setNewTabBlockVisible(visible) {
+  el.newTabBlock.hidden = !visible;
 }
 
 function setNewSpeakerBlockVisible(visible) {
@@ -551,6 +572,10 @@ function selectColorSwatch(color) {
 function closeMessageForm() {
   el.overlay.hidden = true;
 }
+
+el.fieldTabSelect.addEventListener("change", () => {
+  setNewTabBlockVisible(el.fieldTabSelect.value === "__new__");
+});
 
 el.fieldSpeakerSelect.addEventListener("change", () => {
   setNewSpeakerBlockVisible(el.fieldSpeakerSelect.value === "__new__");
@@ -577,7 +602,17 @@ el.overlayBackdrop.addEventListener("click", closeMessageForm);
 el.msgForm.addEventListener("submit", (e) => {
   e.preventDefault();
 
-  const tab = el.fieldTab.value.trim() || "[main]";
+  let tab;
+  if (el.fieldTabSelect.value === "__new__") {
+    tab = el.fieldTabName.value.trim();
+    if (!tab) {
+      window.alert("タブ名を入力してください。");
+      return;
+    }
+  } else {
+    tab = el.fieldTabSelect.value;
+  }
+
   const text = el.fieldText.value.trim();
   if (!text) {
     window.alert("本文を入力してください。");

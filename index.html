@@ -86,9 +86,17 @@
     <form id="msg-form">
       <label class="field">
         <span class="field__label">タブ</span>
-        <input type="text" id="field-tab" list="tab-options" placeholder="[main]" required />
-        <datalist id="tab-options"></datalist>
+        <select id="field-tab-select">
+          <option value="__new__">＋ 新しいタブを追加する</option>
+        </select>
       </label>
+
+      <div id="new-tab-block" class="new-speaker-block" hidden>
+        <label class="field">
+          <span class="field__label">新しいタブ名</span>
+          <input type="text" id="field-tab-name" placeholder="[main]" />
+        </label>
+      </div>
 
       <label class="field">
         <span class="field__label">話者</span>
