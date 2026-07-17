@@ -366,12 +366,16 @@ main {
 
 .overlay__actions {
   display: flex;
+  align-items: center;
   gap: 10px;
   margin-top: 8px;
 }
 .overlay__actions .btn {
   flex: 1 1 0;
   min-width: 0;
+}
+.overlay__actions .btn--block + .btn--block {
+  margin-top: 0;
 }
 
 /* 選択中の発言に対する操作バー */
