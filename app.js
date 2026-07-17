@@ -268,6 +268,8 @@ const el = {
   speakerColorOverlayBackdrop: document.getElementById("speaker-color-overlay-backdrop"),
   speakerColorList: document.getElementById("speaker-color-list"),
   btnCloseSpeakerColors: document.getElementById("btn-close-speaker-colors"),
+
+  btnDeleteEmpty: document.getElementById("btn-delete-empty"),
 };
 
 /* ============================================================
@@ -438,6 +440,20 @@ function deleteMessage(index) {
   state.messages.splice(index, 1);
   renderAll();
 }
+
+function deleteEmptyMessages() {
+  const emptyCount = state.messages.filter((m) => m.text.trim() === "").length;
+  if (emptyCount === 0) {
+    window.alert("本文が空の発言はありませんでした。");
+    return;
+  }
+  const ok = window.confirm(`本文が空の発言が ${emptyCount} 件あります。すべて削除しますか？`);
+  if (!ok) return;
+  state.messages = state.messages.filter((m) => m.text.trim() !== "");
+  renderAll();
+}
+
+el.btnDeleteEmpty.addEventListener("click", deleteEmptyMessages);
 
 /* ============================================================
  * 追加・編集フォーム（5.2 3, 4, 5）
