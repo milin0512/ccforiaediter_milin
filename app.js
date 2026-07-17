@@ -221,6 +221,10 @@ function loadFromHtmlString(htmlString, fileName) {
   state.meta = result.meta;
   state.loadedFileName = fileName;
 
+  selectedMessageId = null;
+  bottomBarMinimized = false;
+  loadSectionExpanded = false;
+
   renderAll();
 }
 
@@ -231,6 +235,10 @@ function loadFromHtmlString(htmlString, fileName) {
 const el = {
   fileInput: document.getElementById("file-input"),
   loadStatus: document.getElementById("load-status"),
+  loadFull: document.getElementById("load-full"),
+  loadCollapsed: document.getElementById("load-collapsed"),
+  loadCollapsedText: document.getElementById("load-collapsed-text"),
+  btnLoadExpand: document.getElementById("btn-load-expand"),
   sectionEditor: document.getElementById("section-editor"),
   sectionExport: document.getElementById("section-export"),
   msgCount: document.getElementById("msg-count"),
@@ -238,7 +246,6 @@ const el = {
   btnAddTop: document.getElementById("btn-add-top"),
   btnAddBottom: document.getElementById("btn-add-bottom"),
   btnSaveTemp: document.getElementById("btn-save-temp"),
-  btnSaveTempBottom: document.getElementById("btn-save-temp-bottom"),
   btnCopyMd: document.getElementById("btn-copy-md"),
   btnDownloadMd: document.getElementById("btn-download-md"),
   exportStatus: document.getElementById("export-status"),
@@ -261,7 +268,14 @@ const el = {
 
   filterSelect: document.getElementById("filter-select"),
   filterNote: document.getElementById("filter-note"),
+  filterSummary: document.getElementById("filter-summary"),
   speakerFilterSelect: document.getElementById("speaker-filter-select"),
+
+  sidebar: document.getElementById("sidebar"),
+  sidebarBackdrop: document.getElementById("sidebar-backdrop"),
+  btnSidebarOpen: document.getElementById("btn-sidebar-open"),
+  btnSidebarClose: document.getElementById("btn-sidebar-close"),
+  sidebarFilterDot: document.getElementById("sidebar-filter-dot"),
 
   btnManageSpeakerColors: document.getElementById("btn-manage-speaker-colors"),
   speakerColorOverlay: document.getElementById("speaker-color-overlay"),
@@ -270,6 +284,17 @@ const el = {
   btnCloseSpeakerColors: document.getElementById("btn-close-speaker-colors"),
 
   btnDeleteEmpty: document.getElementById("btn-delete-empty"),
+
+  bottomBar: document.getElementById("bottom-bar"),
+  bottomBarLabel: document.getElementById("bottom-bar-label"),
+  bottomBarActions: document.getElementById("bottom-bar-actions"),
+  btnBottomBarToggle: document.getElementById("btn-bottom-bar-toggle"),
+  btnBottomBarClose: document.getElementById("btn-bottom-bar-close"),
+  barActionUp: document.getElementById("bar-action-up"),
+  barActionDown: document.getElementById("bar-action-down"),
+  barActionEdit: document.getElementById("bar-action-edit"),
+  barActionDelete: document.getElementById("bar-action-delete"),
+  barActionInsertBelow: document.getElementById("bar-action-insert-below"),
 };
 
 /* ============================================================
@@ -278,6 +303,10 @@ const el = {
 
 let currentFilter = "all";
 let currentSpeakerFilter = "all";
+let loadSectionExpanded = true;
+let sidebarOpen = false;
+let selectedMessageId = null;
+let bottomBarMinimized = false;
 
 function messagePassesFilter(msg) {
   if (currentSpeakerFilter !== "all" && msg.speaker !== currentSpeakerFilter) return false;
@@ -314,12 +343,54 @@ function updateSpeakerFilterOptions() {
 
 el.filterSelect.addEventListener("change", () => {
   currentFilter = el.filterSelect.value;
+  deselectMessage();
   renderList();
 });
 
 el.speakerFilterSelect.addEventListener("change", () => {
   currentSpeakerFilter = el.speakerFilterSelect.value;
+  deselectMessage();
   renderList();
+});
+
+/* ============================================================
+ * サイドバー（ツール・絞り込み）
+ * PC・iPad横向き（900px以上）は常時表示、それ以外はスライドイン
+ * ========================================================== */
+
+function openSidebar() {
+  sidebarOpen = true;
+  el.sidebar.classList.add("is-open");
+  el.sidebarBackdrop.hidden = false;
+}
+
+function closeSidebar() {
+  sidebarOpen = false;
+  el.sidebar.classList.remove("is-open");
+  el.sidebarBackdrop.hidden = true;
+}
+
+el.btnSidebarOpen.addEventListener("click", openSidebar);
+el.btnSidebarClose.addEventListener("click", closeSidebar);
+el.sidebarBackdrop.addEventListener("click", closeSidebar);
+
+/* ============================================================
+ * ①読み込みエリアの折りたたみ（読み込み後は自動で畳む）
+ * ========================================================== */
+
+function renderLoadSection() {
+  const hasFile = !!state.loadedFileName;
+  const showFull = !hasFile || loadSectionExpanded;
+  el.loadFull.hidden = !showFull;
+  el.loadCollapsed.hidden = showFull;
+  if (hasFile) {
+    el.loadCollapsedText.textContent = `① ${state.loadedFileName}（${state.messages.length} 件）読み込み中`;
+  }
+}
+
+el.btnLoadExpand.addEventListener("click", () => {
+  loadSectionExpanded = true;
+  renderLoadSection();
 });
 
 /* ============================================================
@@ -330,14 +401,19 @@ function renderAll() {
   const hasMessages = state.messages.length > 0;
   el.sectionEditor.hidden = !hasMessages;
   el.sectionExport.hidden = !hasMessages;
+  el.sidebar.hidden = !hasMessages;
+  el.btnSidebarOpen.hidden = !hasMessages;
+  if (!hasMessages) closeSidebar();
 
   el.loadStatus.textContent = state.loadedFileName
     ? `読み込み中のファイル：${state.loadedFileName}（発言 ${state.messages.length} 件）` +
       (state.meta.savedAt ? ` / 保存日時：${formatDisplayDate(state.meta.savedAt)}` : "")
     : "まだファイルが読み込まれていません。";
 
+  renderLoadSection();
   updateSpeakerFilterOptions();
   renderList();
+  renderBottomBar();
 }
 
 function formatDisplayDate(iso) {
@@ -356,21 +432,26 @@ function renderList() {
 
   el.filterNote.hidden = !filterActive;
 
+  const activeFilterCount = (currentFilter !== "all" ? 1 : 0) + (currentSpeakerFilter !== "all" ? 1 : 0);
+  el.filterSummary.textContent =
+    activeFilterCount > 0 ? `絞り込み中：${activeFilterCount}件の条件` : "すべて表示中";
+  el.sidebarFilterDot.hidden = activeFilterCount === 0;
+
   el.messageList.innerHTML = "";
 
   const frag = document.createDocumentFragment();
 
   state.messages.forEach((msg, index) => {
     if (!messagePassesFilter(msg)) return;
-    frag.appendChild(buildMessageCard(msg, index, filterActive));
+    frag.appendChild(buildMessageCard(msg, index));
   });
 
   el.messageList.appendChild(frag);
 }
 
-function buildMessageCard(msg, index, filterActive) {
+function buildMessageCard(msg, index) {
   const card = document.createElement("div");
-  card.className = "msg-card";
+  card.className = "msg-card" + (msg.id === selectedMessageId ? " is-selected" : "");
   card.style.borderLeftColor = msg.color;
   card.dataset.id = msg.id;
 
@@ -394,31 +475,117 @@ function buildMessageCard(msg, index, filterActive) {
   text.textContent = msg.text;
   card.appendChild(text);
 
-  const actions = document.createElement("div");
-  actions.className = "msg-card__actions";
-  const orderDisabled = filterActive ? "disabled" : "";
-  actions.innerHTML = `
-    <button type="button" class="btn btn--secondary btn--small" data-action="up" ${orderDisabled}>↑ 上へ</button>
-    <button type="button" class="btn btn--secondary btn--small" data-action="down" ${orderDisabled}>↓ 下へ</button>
-    <button type="button" class="btn btn--secondary btn--small" data-action="edit">編集</button>
-    <button type="button" class="btn btn--danger btn--small" data-action="delete">削除</button>
-    <button type="button" class="btn btn--secondary btn--small btn--full" data-action="insert-below" ${orderDisabled}>＋ この下に発言を追加</button>
-  `;
-  card.appendChild(actions);
-
-  actions.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-action]");
-    if (!btn || btn.disabled) return;
-    const action = btn.dataset.action;
-    if (action === "up") moveMessage(index, -1);
-    else if (action === "down") moveMessage(index, 1);
-    else if (action === "edit") openMessageForm({ mode: "edit", index });
-    else if (action === "delete") deleteMessage(index);
-    else if (action === "insert-below") openMessageForm({ mode: "add", insertAt: index + 1 });
-  });
+  card.addEventListener("click", () => toggleSelectMessage(msg.id));
 
   return card;
 }
+
+/* ============================================================
+ * 発言の選択と、画面下部の操作バー（S3・S1）
+ * ========================================================== */
+
+function findCardEl(id) {
+  return el.messageList.querySelector(`[data-id="${CSS.escape(id)}"]`);
+}
+
+function toggleSelectMessage(id) {
+  const previousId = selectedMessageId;
+  selectedMessageId = selectedMessageId === id ? null : id;
+  bottomBarMinimized = false;
+
+  if (previousId) {
+    const prevEl = findCardEl(previousId);
+    if (prevEl) prevEl.classList.remove("is-selected");
+  }
+  if (selectedMessageId) {
+    const curEl = findCardEl(selectedMessageId);
+    if (curEl) curEl.classList.add("is-selected");
+  }
+
+  renderBottomBar();
+}
+
+function deselectMessage() {
+  if (!selectedMessageId) return;
+  const prevEl = findCardEl(selectedMessageId);
+  if (prevEl) prevEl.classList.remove("is-selected");
+  selectedMessageId = null;
+  renderBottomBar();
+}
+
+function getSelectedIndex() {
+  return state.messages.findIndex((m) => m.id === selectedMessageId);
+}
+
+function renderBottomBar() {
+  if (!selectedMessageId) {
+    el.bottomBar.hidden = true;
+    document.body.style.paddingBottom = "";
+    return;
+  }
+
+  const index = getSelectedIndex();
+  if (index === -1) {
+    selectedMessageId = null;
+    el.bottomBar.hidden = true;
+    document.body.style.paddingBottom = "";
+    return;
+  }
+
+  const msg = state.messages[index];
+  const preview = msg.text.length > 16 ? msg.text.slice(0, 16) + "…" : msg.text;
+
+  el.bottomBar.hidden = false;
+  el.bottomBarLabel.textContent = `${msg.speaker}：${preview}`;
+  el.bottomBarActions.hidden = bottomBarMinimized;
+  el.btnBottomBarToggle.textContent = bottomBarMinimized ? "▲" : "▾";
+
+  const filterActive = isFilterActive();
+  el.barActionUp.disabled = filterActive || index === 0;
+  el.barActionDown.disabled = filterActive || index === state.messages.length - 1;
+  el.barActionInsertBelow.disabled = filterActive;
+
+  requestAnimationFrame(() => {
+    document.body.style.paddingBottom = el.bottomBar.offsetHeight + 16 + "px";
+  });
+}
+
+el.btnBottomBarToggle.addEventListener("click", () => {
+  bottomBarMinimized = !bottomBarMinimized;
+  renderBottomBar();
+});
+
+el.btnBottomBarClose.addEventListener("click", deselectMessage);
+
+el.barActionUp.addEventListener("click", () => {
+  const idx = getSelectedIndex();
+  if (idx === -1) return;
+  moveMessage(idx, -1);
+});
+
+el.barActionDown.addEventListener("click", () => {
+  const idx = getSelectedIndex();
+  if (idx === -1) return;
+  moveMessage(idx, 1);
+});
+
+el.barActionEdit.addEventListener("click", () => {
+  const idx = getSelectedIndex();
+  if (idx === -1) return;
+  openMessageForm({ mode: "edit", index: idx });
+});
+
+el.barActionDelete.addEventListener("click", () => {
+  const idx = getSelectedIndex();
+  if (idx === -1) return;
+  deleteMessage(idx);
+});
+
+el.barActionInsertBelow.addEventListener("click", () => {
+  const idx = getSelectedIndex();
+  if (idx === -1) return;
+  openMessageForm({ mode: "add", insertAt: idx + 1 });
+});
 
 /* ============================================================
  * 並べ替え・削除（5.2 1, 2）
@@ -430,6 +597,10 @@ function moveMessage(index, offset) {
   const [item] = state.messages.splice(index, 1);
   state.messages.splice(target, 0, item);
   renderList();
+  renderBottomBar();
+
+  const cardEl = findCardEl(item.id);
+  if (cardEl) cardEl.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function deleteMessage(index) {
@@ -438,6 +609,7 @@ function deleteMessage(index) {
   const ok = window.confirm(`この発言を削除しますか？\n\n${msg.speaker}：${preview}`);
   if (!ok) return;
   state.messages.splice(index, 1);
+  if (selectedMessageId === msg.id) selectedMessageId = null;
   renderAll();
 }
 
@@ -449,6 +621,8 @@ function deleteEmptyMessages() {
   }
   const ok = window.confirm(`本文が空の発言が ${emptyCount} 件あります。すべて削除しますか？`);
   if (!ok) return;
+  const selectedMsg = state.messages.find((m) => m.id === selectedMessageId);
+  if (selectedMsg && selectedMsg.text.trim() === "") selectedMessageId = null;
   state.messages = state.messages.filter((m) => m.text.trim() !== "");
   renderAll();
 }
@@ -859,7 +1033,6 @@ function saveTemp() {
 }
 
 el.btnSaveTemp.addEventListener("click", saveTemp);
-el.btnSaveTempBottom.addEventListener("click", saveTemp);
 
 /* ============================================================
  * Markdown書き出し（5.5章・7章）

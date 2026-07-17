@@ -9,74 +9,105 @@
 <body>
 
 <header class="app-header">
-  <h1>ココフォリアログ編集ツール</h1>
-  <p class="app-header__lead">読み込む → 編集する → 書き出す</p>
+  <div class="app-header__row">
+    <div>
+      <h1>ココフォリアログ編集ツール</h1>
+      <p class="app-header__lead">読み込む → 編集する → 書き出す</p>
+    </div>
+    <button type="button" class="app-header__menu-btn" id="btn-sidebar-open" hidden aria-label="ツールメニューを開く">
+      ☰
+      <span class="app-header__menu-badge" id="sidebar-filter-dot" hidden></span>
+    </button>
+  </div>
 </header>
 
-<main>
+<div class="layout">
 
-  <!-- ① 読み込みエリア -->
-  <section class="panel" id="section-load">
-    <h2 class="panel__title">① ログを読み込む</h2>
-    <p class="panel__desc">ココフォリアから書き出したHTML、または本ツールで一時保存したHTMLを選んでください。</p>
-    <label class="btn btn--primary btn--block" for="file-input">ファイルを選ぶ</label>
-    <input type="file" id="file-input" accept=".html,text/html" hidden />
-    <p class="load-status" id="load-status">まだファイルが読み込まれていません。</p>
-  </section>
-
-  <!-- ② 編集エリア -->
-  <section class="panel" id="section-editor" hidden>
-    <h2 class="panel__title">② 発言を編集する</h2>
-
-    <div class="editor-toolbar">
-      <button type="button" class="btn btn--primary" id="btn-add-top">＋ 先頭に発言を追加</button>
-      <button type="button" class="btn btn--secondary" id="btn-save-temp">一時保存（HTML）</button>
+  <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+  <aside class="sidebar" id="sidebar" hidden>
+    <div class="sidebar__header">
+      <span class="sidebar__title">ツール</span>
+      <button type="button" class="bottom-bar__icon-btn" id="btn-sidebar-close" aria-label="メニューを閉じる">×</button>
     </div>
 
-    <button type="button" class="btn btn--secondary btn--block" id="btn-manage-speaker-colors">話者の色を管理する</button>
-    <button type="button" class="btn btn--danger btn--block" id="btn-delete-empty">本文が空の発言をまとめて削除</button>
+    <button type="button" class="btn btn--secondary btn--block" id="btn-save-temp">一時保存（HTML）</button>
 
-    <label class="field filter-field">
-      <span class="field__label">話者で絞り込む</span>
-      <select id="speaker-filter-select">
-        <option value="all">すべての話者</option>
-      </select>
-    </label>
-
-    <label class="field filter-field">
-      <span class="field__label">表示するダイスロール判定</span>
-      <select id="filter-select">
-        <option value="all">すべて表示</option>
-        <option value="dice">ダイスロールのみ</option>
-        <option value="dice-success">ダイスロール：成功系のみ（クリティカル/イクストリーム成功/ハード成功/レギュラー成功/成功）</option>
-        <option value="dice-failure">ダイスロール：失敗系のみ（失敗/ファンブル）</option>
-        <option value="talk">ダイスロール以外（会話のみ）</option>
-      </select>
-    </label>
-    <p class="filter-note" id="filter-note" hidden>※ 絞り込み中は並べ替え・追加ができません。「すべて表示」に戻すとご利用いただけます。</p>
-
-    <p class="msg-count" id="msg-count"></p>
-
-    <div id="message-list" class="message-list"></div>
-
-    <div class="editor-toolbar">
-      <button type="button" class="btn btn--primary" id="btn-add-bottom">＋ 末尾に発言を追加</button>
-      <button type="button" class="btn btn--secondary" id="btn-save-temp-bottom">一時保存（HTML）</button>
+    <div class="sidebar__section">
+      <h3 class="sidebar__section-title">その他の操作</h3>
+      <button type="button" class="btn btn--secondary btn--block" id="btn-manage-speaker-colors">話者の色を管理する</button>
+      <button type="button" class="btn btn--danger btn--block" id="btn-delete-empty">本文が空の発言をまとめて削除</button>
     </div>
-  </section>
 
-  <!-- ③ 書き出しエリア -->
-  <section class="panel" id="section-export" hidden>
-    <h2 class="panel__title">③ Markdownとして書き出す</h2>
-    <p class="panel__desc">Notionに貼り付けられるMarkdown形式に変換します。</p>
-    <div class="editor-toolbar">
-      <button type="button" class="btn btn--primary btn--block" id="btn-copy-md">Markdownをコピー</button>
-      <button type="button" class="btn btn--secondary btn--block" id="btn-download-md">Markdownをダウンロード</button>
+    <div class="sidebar__section">
+      <h3 class="sidebar__section-title">絞り込み</h3>
+      <p class="sidebar__section-desc" id="filter-summary">すべて表示中</p>
+      <label class="field filter-field">
+        <span class="field__label">話者で絞り込む</span>
+        <select id="speaker-filter-select">
+          <option value="all">すべての話者</option>
+        </select>
+      </label>
+
+      <label class="field filter-field">
+        <span class="field__label">表示するダイスロール判定</span>
+        <select id="filter-select">
+          <option value="all">すべて表示</option>
+          <option value="dice">ダイスロールのみ</option>
+          <option value="dice-success">ダイスロール：成功系のみ（クリティカル/イクストリーム成功/ハード成功/レギュラー成功/成功）</option>
+          <option value="dice-failure">ダイスロール：失敗系のみ（失敗/ファンブル）</option>
+          <option value="talk">ダイスロール以外（会話のみ）</option>
+        </select>
+      </label>
     </div>
-    <p class="export-status" id="export-status"></p>
-  </section>
+  </aside>
 
-</main>
+  <main>
+
+    <!-- ① 読み込みエリア -->
+    <section class="panel" id="section-load">
+      <div id="load-full">
+        <h2 class="panel__title">① ログを読み込む</h2>
+        <p class="panel__desc">ココフォリアから書き出したHTML、または本ツールで一時保存したHTMLを選んでください。</p>
+        <label class="btn btn--primary btn--block" for="file-input">ファイルを選ぶ</label>
+        <input type="file" id="file-input" accept=".html,text/html" hidden />
+        <p class="load-status" id="load-status">まだファイルが読み込まれていません。</p>
+      </div>
+      <div id="load-collapsed" class="load-collapsed" hidden>
+        <span class="load-collapsed__text" id="load-collapsed-text"></span>
+        <button type="button" class="btn btn--secondary btn--small" id="btn-load-expand">変更する</button>
+      </div>
+    </section>
+
+    <!-- ② 編集エリア -->
+    <section class="panel" id="section-editor" hidden>
+      <h2 class="panel__title">② 発言を編集する</h2>
+
+      <button type="button" class="btn btn--primary btn--block" id="btn-add-top">＋ 先頭に発言を追加</button>
+
+      <p class="filter-note" id="filter-note" hidden>※ 絞り込み中は並べ替え・追加ができません。「すべて表示」に戻すとご利用いただけます。</p>
+
+      <p class="msg-count" id="msg-count"></p>
+      <p class="panel__desc">発言をタップして選択すると、画面下部に操作ボタンが表示されます。</p>
+
+      <div id="message-list" class="message-list"></div>
+
+      <button type="button" class="btn btn--primary btn--block" id="btn-add-bottom">＋ 末尾に発言を追加</button>
+    </section>
+
+    <!-- ③ 書き出しエリア -->
+    <section class="panel" id="section-export" hidden>
+      <h2 class="panel__title">③ Markdownとして書き出す</h2>
+      <p class="panel__desc">Notionに貼り付けられるMarkdown形式に変換します。</p>
+      <div class="editor-toolbar">
+        <button type="button" class="btn btn--primary btn--block" id="btn-copy-md">Markdownをコピー</button>
+        <button type="button" class="btn btn--secondary btn--block" id="btn-download-md">Markdownをダウンロード</button>
+      </div>
+      <p class="export-status" id="export-status"></p>
+    </section>
+
+  </main>
+
+</div>
 
 <!-- 発言 追加・編集パネル（オーバーレイ） -->
 <div class="overlay" id="msg-overlay" hidden>
@@ -147,6 +178,22 @@
     <p class="panel__desc">話者を選ぶと、その話者のすべての発言の色をまとめて変更します。</p>
     <div id="speaker-color-list" class="speaker-color-list"></div>
     <button type="button" class="btn btn--secondary btn--block" id="btn-close-speaker-colors">閉じる</button>
+  </div>
+</div>
+
+<!-- 選択中の発言に対する操作バー（画面下部に固定） -->
+<div class="bottom-bar" id="bottom-bar" hidden>
+  <div class="bottom-bar__row1" id="bottom-bar-row1">
+    <span class="bottom-bar__label" id="bottom-bar-label"></span>
+    <button type="button" class="bottom-bar__icon-btn" id="btn-bottom-bar-toggle" aria-label="操作パネルを開閉する">▾</button>
+    <button type="button" class="bottom-bar__icon-btn" id="btn-bottom-bar-close" aria-label="選択を解除する">×</button>
+  </div>
+  <div class="action-grid" id="bottom-bar-actions">
+    <button type="button" class="btn btn--secondary btn--small" id="bar-action-up">↑ 上へ</button>
+    <button type="button" class="btn btn--secondary btn--small" id="bar-action-down">↓ 下へ</button>
+    <button type="button" class="btn btn--secondary btn--small" id="bar-action-edit">編集</button>
+    <button type="button" class="btn btn--danger btn--small" id="bar-action-delete">削除</button>
+    <button type="button" class="btn btn--secondary btn--small btn--full" id="bar-action-insert-below">＋ この下に発言を追加</button>
   </div>
 </div>
 
