@@ -260,6 +260,12 @@ const el = {
 
   filterSelect: document.getElementById("filter-select"),
   filterNote: document.getElementById("filter-note"),
+
+  btnManageSpeakerColors: document.getElementById("btn-manage-speaker-colors"),
+  speakerColorOverlay: document.getElementById("speaker-color-overlay"),
+  speakerColorOverlayBackdrop: document.getElementById("speaker-color-overlay-backdrop"),
+  speakerColorList: document.getElementById("speaker-color-list"),
+  btnCloseSpeakerColors: document.getElementById("btn-close-speaker-colors"),
 };
 
 /* ============================================================
@@ -598,6 +604,87 @@ el.msgForm.addEventListener("submit", (e) => {
 
 el.btnAddTop.addEventListener("click", () => openMessageForm({ mode: "add", insertAt: 0 }));
 el.btnAddBottom.addEventListener("click", () => openMessageForm({ mode: "add", insertAt: state.messages.length }));
+
+/* ============================================================
+ * 既存話者のカラー管理（一括変更）
+ * ========================================================== */
+
+function recolorSpeaker(speaker, newColor) {
+  const color = newColor.toLowerCase();
+  state.messages.forEach((m) => {
+    if (m.speaker === speaker) m.color = color;
+  });
+  renderAll();
+  renderSpeakerColorList();
+}
+
+function renderSpeakerColorList() {
+  const speakers = getKnownSpeakers();
+  const palette = Array.from(new Set([...COLOR_PRESETS, ...getUsedColors()]));
+
+  el.speakerColorList.innerHTML = "";
+
+  if (speakers.length === 0) {
+    el.speakerColorList.innerHTML = `<p class="panel__desc">まだ話者がいません。</p>`;
+    return;
+  }
+
+  speakers.forEach(({ speaker, color }) => {
+    const row = document.createElement("div");
+    row.className = "speaker-color-row";
+    row.innerHTML = `
+      <div class="speaker-color-row__main">
+        <span class="color-dot" style="background:${escapeHtml(color)}"></span>
+        <span class="speaker-color-row__name">${escapeHtml(speaker)}</span>
+        <button type="button" class="btn btn--secondary btn--small" data-action="toggle">色を変更</button>
+      </div>
+      <div class="speaker-color-row__editor" hidden>
+        <div class="color-swatches">
+          ${palette
+            .map((c) => `<button type="button" class="color-swatch" data-color="${c}" style="background:${c}"></button>`)
+            .join("")}
+        </div>
+        <div class="speaker-color-row__hex">
+          <input type="text" placeholder="#03a9f4" />
+          <button type="button" class="btn btn--primary btn--small" data-action="apply-hex">適用</button>
+        </div>
+      </div>
+    `;
+
+    const editor = row.querySelector(".speaker-color-row__editor");
+    const hexInput = row.querySelector(".speaker-color-row__hex input");
+
+    row.querySelector('[data-action="toggle"]').addEventListener("click", () => {
+      editor.hidden = !editor.hidden;
+    });
+
+    row.querySelectorAll(".color-swatch").forEach((sw) => {
+      sw.addEventListener("click", () => recolorSpeaker(speaker, sw.dataset.color));
+    });
+
+    row.querySelector('[data-action="apply-hex"]').addEventListener("click", () => {
+      const v = hexInput.value.trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(v)) {
+        window.alert("カラーコードは #03a9f4 のような形式で入力してください。");
+        return;
+      }
+      recolorSpeaker(speaker, v);
+    });
+
+    el.speakerColorList.appendChild(row);
+  });
+}
+
+el.btnManageSpeakerColors.addEventListener("click", () => {
+  renderSpeakerColorList();
+  el.speakerColorOverlay.hidden = false;
+});
+el.btnCloseSpeakerColors.addEventListener("click", () => {
+  el.speakerColorOverlay.hidden = true;
+});
+el.speakerColorOverlayBackdrop.addEventListener("click", () => {
+  el.speakerColorOverlay.hidden = true;
+});
 
 /* ============================================================
  * ダイス本文の自動再判定（本文を編集した際の参考用トグル）
