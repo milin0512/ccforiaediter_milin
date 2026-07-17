@@ -260,6 +260,7 @@ const el = {
 
   filterSelect: document.getElementById("filter-select"),
   filterNote: document.getElementById("filter-note"),
+  speakerFilterSelect: document.getElementById("speaker-filter-select"),
 
   btnManageSpeakerColors: document.getElementById("btn-manage-speaker-colors"),
   speakerColorOverlay: document.getElementById("speaker-color-overlay"),
@@ -273,8 +274,11 @@ const el = {
  * ========================================================== */
 
 let currentFilter = "all";
+let currentSpeakerFilter = "all";
 
 function messagePassesFilter(msg) {
+  if (currentSpeakerFilter !== "all" && msg.speaker !== currentSpeakerFilter) return false;
+
   switch (currentFilter) {
     case "dice":
       return msg.isDiceRoll;
@@ -289,8 +293,29 @@ function messagePassesFilter(msg) {
   }
 }
 
+function isFilterActive() {
+  return currentFilter !== "all" || currentSpeakerFilter !== "all";
+}
+
+function updateSpeakerFilterOptions() {
+  const speakers = getKnownSpeakers().map((s) => s.speaker);
+  const previous = currentSpeakerFilter;
+
+  el.speakerFilterSelect.innerHTML =
+    `<option value="all">すべての話者</option>` +
+    speakers.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+
+  currentSpeakerFilter = speakers.includes(previous) ? previous : "all";
+  el.speakerFilterSelect.value = currentSpeakerFilter;
+}
+
 el.filterSelect.addEventListener("change", () => {
   currentFilter = el.filterSelect.value;
+  renderList();
+});
+
+el.speakerFilterSelect.addEventListener("change", () => {
+  currentSpeakerFilter = el.speakerFilterSelect.value;
   renderList();
 });
 
@@ -308,6 +333,7 @@ function renderAll() {
       (state.meta.savedAt ? ` / 保存日時：${formatDisplayDate(state.meta.savedAt)}` : "")
     : "まだファイルが読み込まれていません。";
 
+  updateSpeakerFilterOptions();
   renderList();
 }
 
@@ -318,7 +344,7 @@ function formatDisplayDate(iso) {
 }
 
 function renderList() {
-  const filterActive = currentFilter !== "all";
+  const filterActive = isFilterActive();
   const visibleCount = state.messages.filter(messagePassesFilter).length;
 
   el.msgCount.textContent = filterActive
