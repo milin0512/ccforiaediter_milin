@@ -246,8 +246,9 @@ const el = {
   btnAddTop: document.getElementById("btn-add-top"),
   btnAddBottom: document.getElementById("btn-add-bottom"),
   btnSaveTemp: document.getElementById("btn-save-temp"),
-  btnCopyMd: document.getElementById("btn-copy-md"),
-  btnDownloadMd: document.getElementById("btn-download-md"),
+  exportFormatSelect: document.getElementById("export-format-select"),
+  btnCopyExport: document.getElementById("btn-copy-export"),
+  btnDownloadExport: document.getElementById("btn-download-export"),
   exportStatus: document.getElementById("export-status"),
 
   overlay: document.getElementById("msg-overlay"),
@@ -1076,14 +1077,14 @@ function nearestColorEmoji(hex) {
   return best.emoji;
 }
 
-function buildMarkdown() {
+function buildExportLines(markdownStyle) {
   const lines = [];
   let currentTab = null;
   let prevWasMessage = false;
 
   state.messages.forEach((m) => {
     if (m.tab !== currentTab) {
-      lines.push(`### ${m.tab}`);
+      lines.push(markdownStyle ? `### ${m.tab}` : m.tab);
       currentTab = m.tab;
       prevWasMessage = false;
     } else if (prevWasMessage) {
@@ -1091,28 +1092,44 @@ function buildMarkdown() {
     }
     const flatText = m.text.replace(/\n/g, " ");
     const noEmojiSpeakers = ["KP", "PL"];
-    const prefix = noEmojiSpeakers.includes(m.speaker.trim()) ? "" : `${nearestColorEmoji(m.color)} `;
-    lines.push(`${prefix}**${m.speaker}**：${flatText}`);
+    const emojiPrefix = noEmojiSpeakers.includes(m.speaker.trim()) ? "" : `${nearestColorEmoji(m.color)} `;
+    const speakerLabel = markdownStyle ? `**${m.speaker}**` : m.speaker;
+    lines.push(`${emojiPrefix}${speakerLabel}：${flatText}`);
     prevWasMessage = true;
   });
 
   return lines.join("\n");
 }
 
-el.btnCopyMd.addEventListener("click", async () => {
-  const md = buildMarkdown();
+function buildMarkdown() {
+  return buildExportLines(true);
+}
+
+function buildPlainText() {
+  return buildExportLines(false);
+}
+
+function getExportContent() {
+  if (el.exportFormatSelect.value === "text") {
+    return { content: buildPlainText(), ext: "txt", mime: "text/plain", label: "テキスト" };
+  }
+  return { content: buildMarkdown(), ext: "md", mime: "text/markdown", label: "Markdown" };
+}
+
+el.btnCopyExport.addEventListener("click", async () => {
+  const { content, label } = getExportContent();
   try {
-    await navigator.clipboard.writeText(md);
-    el.exportStatus.textContent = "コピーしました。Notionに貼り付けてください。";
+    await navigator.clipboard.writeText(content);
+    el.exportStatus.textContent = `コピーしました（${label}）。貼り付けてご利用ください。`;
   } catch (e) {
     el.exportStatus.textContent = "コピーに失敗しました。「ダウンロード」をお試しください。";
   }
 });
 
-el.btnDownloadMd.addEventListener("click", () => {
-  const md = buildMarkdown();
+el.btnDownloadExport.addEventListener("click", () => {
+  const { content, ext, mime } = getExportContent();
   const base = stripExtension(state.loadedFileName || "ccfolia-log");
-  downloadTextFile(`${base}.md`, md, "text/markdown");
+  downloadTextFile(`${base}.${ext}`, content, mime);
   el.exportStatus.textContent = "ダウンロードしました。";
 });
 

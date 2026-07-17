@@ -98,11 +98,20 @@
 
     <!-- ③ 書き出しエリア -->
     <section class="panel" id="section-export" hidden>
-      <h2 class="panel__title">③ Markdownとして書き出す</h2>
-      <p class="panel__desc">Notionに貼り付けられるMarkdown形式に変換します。</p>
+      <h2 class="panel__title">③ 書き出す</h2>
+      <p class="panel__desc">Notionへの貼り付けなどに使える形式に変換します。</p>
+
+      <label class="field filter-field">
+        <span class="field__label">書き出し形式</span>
+        <select id="export-format-select">
+          <option value="markdown">Markdown（Notion向け）</option>
+          <option value="text">テキスト（.txt）</option>
+        </select>
+      </label>
+
       <div class="editor-toolbar">
-        <button type="button" class="btn btn--primary btn--block" id="btn-copy-md">Markdownをコピー</button>
-        <button type="button" class="btn btn--secondary btn--block" id="btn-download-md">Markdownをダウンロード</button>
+        <button type="button" class="btn btn--primary btn--block" id="btn-copy-export">コピー</button>
+        <button type="button" class="btn btn--secondary btn--block" id="btn-download-export">ダウンロード</button>
       </div>
       <p class="export-status" id="export-status"></p>
     </section>
