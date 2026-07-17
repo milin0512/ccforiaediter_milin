@@ -240,11 +240,8 @@ const el = {
   loadCollapsedText: document.getElementById("load-collapsed-text"),
   btnLoadExpand: document.getElementById("btn-load-expand"),
   sectionEditor: document.getElementById("section-editor"),
-  sectionExport: document.getElementById("section-export"),
   msgCount: document.getElementById("msg-count"),
   messageList: document.getElementById("message-list"),
-  btnAddTop: document.getElementById("btn-add-top"),
-  btnAddBottom: document.getElementById("btn-add-bottom"),
   btnSaveTemp: document.getElementById("btn-save-temp"),
   exportFormatSelect: document.getElementById("export-format-select"),
   btnCopyExport: document.getElementById("btn-copy-export"),
@@ -335,7 +332,7 @@ function updateSpeakerFilterOptions() {
   const previous = currentSpeakerFilter;
 
   el.speakerFilterSelect.innerHTML =
-    `<option value="all">すべての話者</option>` +
+    `<option value="all">すべての発言者</option>` +
     speakers.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
 
   currentSpeakerFilter = speakers.includes(previous) ? previous : "all";
@@ -385,7 +382,7 @@ function renderLoadSection() {
   el.loadFull.hidden = !showFull;
   el.loadCollapsed.hidden = showFull;
   if (hasFile) {
-    el.loadCollapsedText.textContent = `① ${state.loadedFileName}（${state.messages.length} 件）読み込み中`;
+    el.loadCollapsedText.textContent = `${state.loadedFileName}（${state.messages.length} 件）読み込み中`;
   }
 }
 
@@ -401,7 +398,6 @@ el.btnLoadExpand.addEventListener("click", () => {
 function renderAll() {
   const hasMessages = state.messages.length > 0;
   el.sectionEditor.hidden = !hasMessages;
-  el.sectionExport.hidden = !hasMessages;
   el.sidebar.hidden = !hasMessages;
   el.btnSidebarOpen.hidden = !hasMessages;
   if (!hasMessages) closeSidebar();
@@ -686,7 +682,7 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
   el.fieldSpeakerSelect.innerHTML =
     knownSpeakers
       .map((s) => `<option value="${escapeHtml(s.speaker)}" data-color="${s.color}">${escapeHtml(s.speaker)}</option>`)
-      .join("") + `<option value="__new__">＋ 新しい話者を登録する</option>`;
+      .join("") + `<option value="__new__">＋ 新しい発言者を登録する</option>`;
 
   // 色スウォッチ（プリセット ＋ 使用中の色）
   const palette = Array.from(new Set([...COLOR_PRESETS, ...getUsedColors()]));
@@ -814,7 +810,7 @@ el.msgForm.addEventListener("submit", (e) => {
   if (el.fieldSpeakerSelect.value === "__new__") {
     speaker = el.fieldSpeakerName.value.trim();
     if (!speaker) {
-      window.alert("話者名を入力してください。");
+      window.alert("発言者名を入力してください。");
       return;
     }
     color = el.fieldSpeakerColor.value.trim();
@@ -854,9 +850,6 @@ el.msgForm.addEventListener("submit", (e) => {
   renderAll();
 });
 
-el.btnAddTop.addEventListener("click", () => openMessageForm({ mode: "add", insertAt: 0 }));
-el.btnAddBottom.addEventListener("click", () => openMessageForm({ mode: "add", insertAt: state.messages.length }));
-
 /* ============================================================
  * 既存話者のカラー管理（一括変更）
  * ========================================================== */
@@ -877,7 +870,7 @@ function renderSpeakerColorList() {
   el.speakerColorList.innerHTML = "";
 
   if (speakers.length === 0) {
-    el.speakerColorList.innerHTML = `<p class="panel__desc">まだ話者がいません。</p>`;
+    el.speakerColorList.innerHTML = `<p class="panel__desc">まだ発言者がいません。</p>`;
     return;
   }
 
