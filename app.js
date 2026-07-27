@@ -472,9 +472,40 @@ function buildMessageCard(msg, index) {
   text.textContent = msg.text;
   card.appendChild(text);
 
-  card.addEventListener("click", () => toggleSelectMessage(msg.id));
+  card.addEventListener("click", () => handleCardTap(msg.id));
 
   return card;
+}
+
+/* ダブルタップ（ダブルクリック）判定。
+ * dblclick イベントはタッチ環境での挙動が端末差が大きいので、
+ * click の間隔を自前で見て判定する。 */
+const DOUBLE_TAP_MS = 320;
+let lastTapId = null;
+let lastTapAt = 0;
+
+function handleCardTap(id) {
+  const now = Date.now();
+  const isDoubleTap = id === lastTapId && now - lastTapAt < DOUBLE_TAP_MS;
+  lastTapId = isDoubleTap ? null : id;
+  lastTapAt = isDoubleTap ? 0 : now;
+
+  if (!isDoubleTap) {
+    toggleSelectMessage(id);
+    return;
+  }
+
+  // ダブルタップ時は必ずその発言を選択状態にしてから編集を開く
+  if (selectedMessageId !== id) toggleSelectMessage(id);
+
+  const index = state.messages.findIndex((m) => m.id === id);
+  if (index === -1) return;
+
+  // ダブルクリックによる本文の範囲選択を解除しておく
+  const selection = window.getSelection();
+  if (selection) selection.removeAllRanges();
+
+  openMessageForm({ mode: "edit", index });
 }
 
 /* ============================================================
