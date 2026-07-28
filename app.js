@@ -74,7 +74,25 @@ function escapeHtml(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const DEFAULT_COLOR = "#888888";
+
+// 外部から読み込んだ色は必ずここを通す。
+// #rrggbb 以外は既定色に落とし、style属性やdata属性への文字列注入を防ぐ。
+function normalizeColor(value) {
+  const s = typeof value === "string" ? value.trim() : "";
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : DEFAULT_COLOR;
+}
+
+// 外部から読み込んだ値を必ず文字列にする。
+// 壊れたファイルで数値やオブジェクトが入っていても、後段が例外で止まらないようにする。
+function toText(value) {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  return String(value);
 }
 
 function pad2(n) {
@@ -134,7 +152,7 @@ function parseCcfoliaHtml(htmlString) {
 
     const styleAttr = p.getAttribute("style") || "";
     const colorMatch = styleAttr.match(/color:\s*(#[0-9a-fA-F]{6})/);
-    const color = colorMatch ? colorMatch[1].toLowerCase() : "#888888";
+    const color = normalizeColor(colorMatch ? colorMatch[1] : DEFAULT_COLOR);
 
     const tab = extractSpanText(spans[0]);
     const speaker = extractSpanText(spans[1]);
@@ -180,21 +198,34 @@ function parseSavedHtml(htmlString) {
     return null;
   }
 
-  const messages = (data.messages || []).map((m) => ({
-    id: m.id || uid(),
-    tab: m.tab || "[main]",
-    speaker: m.speaker || "",
-    color: (m.color || "#888888").toLowerCase(),
-    text: m.text || "",
-    isDiceRoll: !!m.isDiceRoll,
-  }));
+  // 想定の形をしていない場合は「保存ファイルではない」とみなし、
+  // 呼び出し元で通常のココフォリアHTMLとして解析させる
+  if (!data || typeof data !== "object" || !Array.isArray(data.messages)) return null;
+
+  // IDが重複していると、選択・編集が別の発言を巻き込むので振り直す
+  const seenIds = new Set();
+  const messages = data.messages
+    .filter((m) => m && typeof m === "object")
+    .map((m) => {
+      let id = typeof m.id === "string" && m.id ? m.id : uid();
+      if (seenIds.has(id)) id = uid();
+      seenIds.add(id);
+      return {
+        id,
+        tab: toText(m.tab) || "[main]",
+        speaker: toText(m.speaker),
+        color: normalizeColor(m.color),
+        text: toText(m.text),
+        isDiceRoll: !!m.isDiceRoll,
+      };
+    });
 
   return {
     messages,
     meta: {
       schemaVersion: data.schemaVersion || SCHEMA_VERSION,
-      savedAt: data.savedAt || null,
-      sourceFileName: data.sourceFileName || null,
+      savedAt: typeof data.savedAt === "string" ? data.savedAt : null,
+      sourceFileName: typeof data.sourceFileName === "string" ? data.sourceFileName : null,
     },
   };
 }
@@ -463,7 +494,7 @@ function buildMessageCard(msg, index) {
   const speaker = document.createElement("div");
   speaker.className = "msg-card__speaker";
   speaker.innerHTML =
-    `<span class="color-dot" style="background:${escapeHtml(msg.color)}"></span>` +
+    `<span class="color-dot" style="background:${escapeHtml(normalizeColor(msg.color))}"></span>` +
     `<span>${escapeHtml(msg.speaker)}</span>`;
   card.appendChild(speaker);
 
@@ -692,8 +723,14 @@ function getKnownTabs() {
   return Array.from(tabs);
 }
 
+// 色スウォッチのHTML。色は必ず正規化＋エスケープしてから属性に埋める。
+function buildColorSwatchHtml(color) {
+  const c = escapeHtml(normalizeColor(color));
+  return `<button type="button" class="color-swatch" data-color="${c}" style="background:${c}"></button>`;
+}
+
 function getUsedColors() {
-  const colors = new Set(state.messages.map((m) => m.color));
+  const colors = new Set(state.messages.map((m) => normalizeColor(m.color)));
   return Array.from(colors);
 }
 
@@ -712,14 +749,15 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
   const knownSpeakers = getKnownSpeakers();
   el.fieldSpeakerSelect.innerHTML =
     knownSpeakers
-      .map((s) => `<option value="${escapeHtml(s.speaker)}" data-color="${s.color}">${escapeHtml(s.speaker)}</option>`)
+      .map(
+        (s) =>
+          `<option value="${escapeHtml(s.speaker)}" data-color="${escapeHtml(normalizeColor(s.color))}">${escapeHtml(s.speaker)}</option>`
+      )
       .join("") + `<option value="__new__">＋ 新しい発言者を登録する</option>`;
 
   // 色スウォッチ（プリセット ＋ 使用中の色）
   const palette = Array.from(new Set([...COLOR_PRESETS, ...getUsedColors()]));
-  el.colorSwatches.innerHTML = palette
-    .map((c) => `<button type="button" class="color-swatch" data-color="${c}" style="background:${c}"></button>`)
-    .join("");
+  el.colorSwatches.innerHTML = palette.map(buildColorSwatchHtml).join("");
 
   let editingMsg = null;
   if (mode === "edit") {
@@ -861,7 +899,7 @@ el.msgForm.addEventListener("submit", (e) => {
     const msg = state.messages[formContext.index];
     msg.tab = tab;
     msg.speaker = speaker;
-    msg.color = color.toLowerCase();
+    msg.color = normalizeColor(color);
     msg.text = text;
     msg.isDiceRoll = isDiceRoll;
   } else {
@@ -869,7 +907,7 @@ el.msgForm.addEventListener("submit", (e) => {
       id: uid(),
       tab,
       speaker,
-      color: color.toLowerCase(),
+      color: normalizeColor(color),
       text,
       isDiceRoll,
     };
@@ -886,7 +924,7 @@ el.msgForm.addEventListener("submit", (e) => {
  * ========================================================== */
 
 function recolorSpeaker(speaker, newColor) {
-  const color = newColor.toLowerCase();
+  const color = normalizeColor(newColor);
   state.messages.forEach((m) => {
     if (m.speaker === speaker) m.color = color;
   });
@@ -910,15 +948,13 @@ function renderSpeakerColorList() {
     row.className = "speaker-color-row";
     row.innerHTML = `
       <div class="speaker-color-row__main">
-        <span class="color-dot" style="background:${escapeHtml(color)}"></span>
+        <span class="color-dot" style="background:${escapeHtml(normalizeColor(color))}"></span>
         <span class="speaker-color-row__name">${escapeHtml(speaker)}</span>
         <button type="button" class="btn btn--secondary btn--small" data-action="toggle">色を変更</button>
       </div>
       <div class="speaker-color-row__editor" hidden>
         <div class="color-swatches">
-          ${palette
-            .map((c) => `<button type="button" class="color-swatch" data-color="${c}" style="background:${c}"></button>`)
-            .join("")}
+          ${palette.map(buildColorSwatchHtml).join("")}
         </div>
         <div class="speaker-color-row__hex">
           <input type="text" placeholder="#03a9f4" />
@@ -986,7 +1022,7 @@ function buildHybridHtml() {
   const bodyHtml = state.messages
     .map((m) => {
       const textHtml = escapeHtml(m.text).replace(/\n/g, "<br>");
-      return `<p style="color:${m.color};">
+      return `<p style="color:${escapeHtml(normalizeColor(m.color))};">
   <span> ${escapeHtml(m.tab)}</span>
   <span>${escapeHtml(m.speaker)}</span> :
   <span>
