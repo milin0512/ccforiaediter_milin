@@ -255,6 +255,7 @@ function loadFromHtmlString(htmlString, fileName) {
   selectedMessageId = null;
   bottomBarMinimized = false;
   loadSectionExpanded = false;
+  loadYieldedNoMessages = state.messages.length === 0;
 
   renderAll();
 }
@@ -336,6 +337,8 @@ let loadSectionExpanded = true;
 let sidebarOpen = false;
 let selectedMessageId = null;
 let bottomBarMinimized = false;
+// 「発言0件」が読み込み失敗によるものか、すべて削除した結果かを区別するための記録
+let loadYieldedNoMessages = false;
 
 function messagePassesFilter(msg) {
   if (currentSpeakerFilter !== "all" && msg.speaker !== currentSpeakerFilter) return false;
@@ -409,7 +412,10 @@ el.sidebarBackdrop.addEventListener("click", closeSidebar);
 
 function renderLoadSection() {
   const hasFile = !!state.loadedFileName;
-  const showFull = !hasFile || loadSectionExpanded;
+  // 発言が0件のときは畳まない。畳むと「ファイルを選ぶ」が隠れて、
+  // 別のファイルを選び直す手段が分かりにくくなるため。
+  const hasMessages = state.messages.length > 0;
+  const showFull = !hasFile || !hasMessages || loadSectionExpanded;
   el.loadFull.hidden = !showFull;
   el.loadCollapsed.hidden = showFull;
   if (hasFile) {
@@ -433,10 +439,20 @@ function renderAll() {
   el.btnSidebarOpen.hidden = !hasMessages;
   if (!hasMessages) closeSidebar();
 
-  el.loadStatus.textContent = state.loadedFileName
-    ? `読み込み中のファイル：${state.loadedFileName}（発言 ${state.messages.length} 件）` +
-      (state.meta.savedAt ? ` / 保存日時：${formatDisplayDate(state.meta.savedAt)}` : "")
-    : "まだファイルが読み込まれていません。";
+  if (!state.loadedFileName) {
+    el.loadStatus.textContent = "まだファイルが読み込まれていません。";
+  } else if (hasMessages) {
+    el.loadStatus.textContent =
+      `読み込み中のファイル：${state.loadedFileName}（発言 ${state.messages.length} 件）` +
+      (state.meta.savedAt ? ` / 保存日時：${formatDisplayDate(state.meta.savedAt)}` : "");
+  } else if (loadYieldedNoMessages) {
+    // 読み込んだ時点で0件＝ログ以外のHTMLを選んだ可能性が高いので、その旨を伝える
+    el.loadStatus.textContent =
+      `${state.loadedFileName} から発言を読み取れませんでした。ココフォリアの書き出しHTML、または本ツールで一時保存したHTMLを選んでください。`;
+  } else {
+    // 読み込みは成功していて、編集の結果0件になった場合
+    el.loadStatus.textContent = `${state.loadedFileName}：発言がすべて削除されました。`;
+  }
 
   renderLoadSection();
   updateSpeakerFilterOptions();
@@ -592,6 +608,19 @@ function renderBottomBar() {
   }
 
   const msg = state.messages[index];
+
+  // 絞り込みの結果、選択中の発言が一覧から消えることがある（例：発言者で絞り込み中に
+  // その発言の発言者を変更した）。操作バーだけ残ると対象が見えないまま削除できてしまうので、
+  // 選択を解除する。
+  if (!messagePassesFilter(msg)) {
+    const staleEl = findCardEl(selectedMessageId);
+    if (staleEl) staleEl.classList.remove("is-selected");
+    selectedMessageId = null;
+    el.bottomBar.hidden = true;
+    document.body.style.paddingBottom = "";
+    return;
+  }
+
   const preview = msg.text.length > 16 ? msg.text.slice(0, 16) + "…" : msg.text;
 
   el.bottomBar.hidden = false;
@@ -650,12 +679,38 @@ el.barActionInsertBelow.addEventListener("click", () => {
  * 並べ替え・削除（5.2 1, 2）
  * ========================================================== */
 
+function setCardIndexLabel(cardEl, index) {
+  const label = cardEl.querySelector(".msg-card__index");
+  if (label) label.textContent = `#${index + 1}`;
+}
+
 function moveMessage(index, offset) {
   const target = index + offset;
   if (target < 0 || target >= state.messages.length) return;
   const [item] = state.messages.splice(index, 1);
   state.messages.splice(target, 0, item);
-  renderList();
+
+  // 並べ替えは絞り込み解除中しか押せないため、一覧のDOMは全発言と1対1で対応している。
+  // 全再描画は件数が多いと重い（2600件で150ms以上かかり、連続タップがもたつく）ので、
+  // 動いた1件だけをDOM上でも動かし、番号が変わる範囲だけ振り直す。
+  const movedEl = findCardEl(item.id);
+  const anchorEl = target > 0 ? findCardEl(state.messages[target - 1].id) : null;
+
+  if (movedEl && (anchorEl || target === 0)) {
+    if (anchorEl) anchorEl.after(movedEl);
+    else el.messageList.prepend(movedEl);
+
+    const from = Math.min(index, target);
+    const to = Math.max(index, target);
+    for (let i = from; i <= to; i++) {
+      const cardEl = findCardEl(state.messages[i].id);
+      if (cardEl) setCardIndexLabel(cardEl, i);
+    }
+  } else {
+    // 想定外の状態（DOMと状態がずれている等）では安全側に倒して作り直す
+    renderList();
+  }
+
   renderBottomBar();
 
   const cardEl = findCardEl(item.id);
