@@ -93,6 +93,8 @@ main {
   user-select: none;
 }
 .btn--block { display: flex; width: 100%; }
+/* .btn系はdisplayを明示しているので、hidden属性を効かせるには打ち消しが要る */
+.btn[hidden] { display: none; }
 .btn--block + .btn--block { margin-top: 10px; }
 .btn--primary { background: var(--color-primary); color: #fff; }
 .btn--primary:active { background: var(--color-primary-dark); }
@@ -185,6 +187,61 @@ main {
 }
 .sidebar__first-btn {
   margin-top: 0 !important;
+}
+
+.restore-notice {
+  border: 1px solid var(--color-primary);
+  background: rgba(37, 99, 235, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
+.restore-notice[hidden] { display: none; }
+.restore-notice__title {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+}
+
+.restore-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 5件並んでも「ファイルを選ぶ」が画面外に押し出されないよう、1件を1行に収める */
+.restore-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.restore-item__info {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.restore-item__name {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.restore-item__meta {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+}
+.restore-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.restore-item__actions .btn {
+  white-space: nowrap;
 }
 
 .load-collapsed {

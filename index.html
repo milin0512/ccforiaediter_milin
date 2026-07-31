@@ -30,6 +30,8 @@
     </div>
 
     <button type="button" class="btn btn--primary btn--block sidebar__first-btn" id="btn-save-temp">一時保存（HTML）</button>
+    <button type="button" class="btn btn--secondary btn--block" id="btn-share-temp" hidden>共有して保存（保存先を選ぶ）</button>
+    <p class="export-status" id="save-temp-status"></p>
 
     <div class="sidebar__section">
       <h3 class="sidebar__section-title">書き出す</h3>
@@ -81,6 +83,12 @@
       <div id="load-full">
         <h2 class="panel__title">ログを読み込む</h2>
         <p class="panel__desc">ココフォリアから書き出したHTML、または本ツールで一時保存したHTMLを選んでください。</p>
+
+        <div class="restore-notice" id="restore-notice" hidden>
+          <p class="restore-notice__title">編集途中の内容が残っています（最新5件まで自動保存）</p>
+          <ul class="restore-list" id="restore-list"></ul>
+        </div>
+
         <label class="btn btn--primary btn--block" for="file-input">ファイルを選ぶ</label>
         <input type="file" id="file-input" accept=".html,text/html" hidden />
         <p class="load-status" id="load-status">まだファイルが読み込まれていません。</p>

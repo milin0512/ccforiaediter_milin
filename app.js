@@ -186,6 +186,28 @@ function findStateScript(doc) {
   return doc.getElementById(STATE_SCRIPT_ID);
 }
 
+// 外部（保存HTML・ブラウザ内の自動保存）から読み込んだ発言の配列を、
+// アプリ内で扱える形に揃える。値の正規化とID重複の解消をここに集約する。
+function normalizeLoadedMessages(list) {
+  // IDが重複していると、選択・編集が別の発言を巻き込むので振り直す
+  const seenIds = new Set();
+  return list
+    .filter((m) => m && typeof m === "object")
+    .map((m) => {
+      let id = typeof m.id === "string" && m.id ? m.id : uid();
+      if (seenIds.has(id)) id = uid();
+      seenIds.add(id);
+      return {
+        id,
+        tab: toText(m.tab) || "[main]",
+        speaker: toText(m.speaker),
+        color: normalizeColor(m.color),
+        text: toText(m.text),
+        isDiceRoll: !!m.isDiceRoll,
+      };
+    });
+}
+
 function parseSavedHtml(htmlString) {
   const doc = new DOMParser().parseFromString(htmlString, "text/html");
   const scriptEl = findStateScript(doc);
@@ -202,26 +224,8 @@ function parseSavedHtml(htmlString) {
   // 呼び出し元で通常のココフォリアHTMLとして解析させる
   if (!data || typeof data !== "object" || !Array.isArray(data.messages)) return null;
 
-  // IDが重複していると、選択・編集が別の発言を巻き込むので振り直す
-  const seenIds = new Set();
-  const messages = data.messages
-    .filter((m) => m && typeof m === "object")
-    .map((m) => {
-      let id = typeof m.id === "string" && m.id ? m.id : uid();
-      if (seenIds.has(id)) id = uid();
-      seenIds.add(id);
-      return {
-        id,
-        tab: toText(m.tab) || "[main]",
-        speaker: toText(m.speaker),
-        color: normalizeColor(m.color),
-        text: toText(m.text),
-        isDiceRoll: !!m.isDiceRoll,
-      };
-    });
-
   return {
-    messages,
+    messages: normalizeLoadedMessages(data.messages),
     meta: {
       schemaVersion: data.schemaVersion || SCHEMA_VERSION,
       savedAt: typeof data.savedAt === "string" ? data.savedAt : null,
@@ -256,6 +260,170 @@ function loadFromHtmlString(htmlString, fileName) {
   bottomBarMinimized = false;
   loadSectionExpanded = false;
   loadYieldedNoMessages = state.messages.length === 0;
+  // 別のログを読み込んだら、前のファイルを上書きしないよう保存先を忘れる
+  saveFileHandle = null;
+
+  renderAll();
+}
+
+/* ============================================================
+ * 編集内容の自動保存（ブラウザ内・端末外には出ない）
+ * 次に開いたときに「前回の続き」から再開できるようにする。
+ * ========================================================== */
+
+// 一覧用の見出し情報（軽い）と、発言本体（重い）を別のキーに分けて持つ。
+// こうすると一覧表示のたびに全ログを読み込まずに済み、保存時も編集中の1件だけを書けばよい。
+const AUTOSAVE_INDEX_KEY = "ccfolia-log-editor:autosave-index";
+const AUTOSAVE_DATA_PREFIX = "ccfolia-log-editor:autosave:";
+const AUTOSAVE_MAX_ENTRIES = 5;
+const AUTOSAVE_DEBOUNCE_MS = 800;
+
+let autoSaveTimer = null;
+let autoSaveDisabled = false;
+
+// 同じシナリオのログは同じ枠に上書きしたいので、一時保存HTMLを読み直しても
+// 変わらない「元のココフォリアのファイル名」を枠の見分けに使う。
+function currentAutoSaveKey() {
+  return state.meta.sourceFileName || state.loadedFileName || "ccfolia-log";
+}
+
+function readAutoSaveIndex() {
+  let raw;
+  try {
+    raw = localStorage.getItem(AUTOSAVE_INDEX_KEY);
+  } catch (e) {
+    return [];
+  }
+  if (!raw) return [];
+
+  let list;
+  try {
+    list = JSON.parse(raw);
+  } catch (e) {
+    return [];
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter((e) => e && typeof e === "object" && typeof e.id === "string");
+}
+
+function removeAutoSaveData(id) {
+  try {
+    localStorage.removeItem(AUTOSAVE_DATA_PREFIX + id);
+  } catch (e) {
+    // 消せなくても実害はないので握りつぶす
+  }
+}
+
+function scheduleAutoSave() {
+  if (autoSaveDisabled) return;
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(writeAutoSave, AUTOSAVE_DEBOUNCE_MS);
+}
+
+function writeAutoSave() {
+  autoSaveTimer = null;
+  if (autoSaveDisabled) return;
+  // 発言が0件のときは書き込まない。ここで消してしまうと、
+  // ログ以外のHTMLを誤って選んだだけで前回の編集内容が失われてしまう。
+  // 自動保存を消すのは「破棄」を押したときだけにする。
+  if (state.messages.length === 0) return;
+
+  const key = currentAutoSaveKey();
+  const stored = readAutoSaveIndex();
+  const existing = stored.find((e) => e.key === key);
+
+  const entry = {
+    id: existing ? existing.id : uid(),
+    key,
+    sourceFileName: state.meta.sourceFileName || null,
+    loadedFileName: state.loadedFileName || null,
+    savedAt: new Date().toISOString(),
+    count: state.messages.length,
+  };
+
+  // 編集中のものを先頭に置き、古いものから上限を超えた分を捨てる
+  const list = [entry, ...stored.filter((e) => e.key !== key)];
+  while (list.length > AUTOSAVE_MAX_ENTRIES) {
+    removeAutoSaveData(list.pop().id);
+  }
+
+  const payload = JSON.stringify({ schemaVersion: SCHEMA_VERSION, messages: state.messages });
+
+  for (;;) {
+    try {
+      localStorage.setItem(AUTOSAVE_DATA_PREFIX + entry.id, payload);
+      localStorage.setItem(AUTOSAVE_INDEX_KEY, JSON.stringify(list));
+      return;
+    } catch (e) {
+      // 容量が足りないときは、古い記録から順に手放して入るところまで試す。
+      // 編集中のもの（先頭）だけは最後まで残す。
+      if (list.length > 1) {
+        removeAutoSaveData(list.pop().id);
+        continue;
+      }
+      autoSaveDisabled = true;
+      console.warn("自動保存できませんでした:", e);
+      return;
+    }
+  }
+}
+
+function readAutoSaveMessages(id) {
+  let raw;
+  try {
+    raw = localStorage.getItem(AUTOSAVE_DATA_PREFIX + id);
+  } catch (e) {
+    return null;
+  }
+  if (!raw) return null;
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+  if (!data || typeof data !== "object" || !Array.isArray(data.messages) || data.messages.length === 0) {
+    return null;
+  }
+  return data.messages;
+}
+
+function discardAutoSave(id) {
+  removeAutoSaveData(id);
+  const list = readAutoSaveIndex().filter((e) => e.id !== id);
+  try {
+    localStorage.setItem(AUTOSAVE_INDEX_KEY, JSON.stringify(list));
+  } catch (e) {
+    // 一覧を書き戻せなくても、本体は消えているので実害はない
+  }
+  renderRestoreList();
+}
+
+function restoreFromAutoSave(id) {
+  const entry = readAutoSaveIndex().find((e) => e.id === id);
+  const messages = entry ? readAutoSaveMessages(id) : null;
+  if (!entry || !messages) {
+    // 記録が壊れている・本体だけ消えている場合は一覧からも取り除く
+    discardAutoSave(id);
+    window.alert("この自動保存は読み込めませんでした。一覧から取り除きます。");
+    return;
+  }
+
+  state.messages = normalizeLoadedMessages(messages);
+  state.meta = {
+    schemaVersion: SCHEMA_VERSION,
+    savedAt: typeof entry.savedAt === "string" ? entry.savedAt : null,
+    sourceFileName: typeof entry.sourceFileName === "string" ? entry.sourceFileName : null,
+  };
+  state.loadedFileName =
+    typeof entry.loadedFileName === "string" && entry.loadedFileName ? entry.loadedFileName : entry.key;
+
+  selectedMessageId = null;
+  bottomBarMinimized = false;
+  loadSectionExpanded = false;
+  loadYieldedNoMessages = state.messages.length === 0;
+  saveFileHandle = null;
 
   renderAll();
 }
@@ -275,6 +443,10 @@ const el = {
   msgCount: document.getElementById("msg-count"),
   messageList: document.getElementById("message-list"),
   btnSaveTemp: document.getElementById("btn-save-temp"),
+  btnShareTemp: document.getElementById("btn-share-temp"),
+  saveTempStatus: document.getElementById("save-temp-status"),
+  restoreNotice: document.getElementById("restore-notice"),
+  restoreList: document.getElementById("restore-list"),
   exportFormatSelect: document.getElementById("export-format-select"),
   btnCopyExport: document.getElementById("btn-copy-export"),
   btnDownloadExport: document.getElementById("btn-download-export"),
@@ -339,6 +511,10 @@ let selectedMessageId = null;
 let bottomBarMinimized = false;
 // 「発言0件」が読み込み失敗によるものか、すべて削除した結果かを区別するための記録
 let loadYieldedNoMessages = false;
+// PC(Chrome/Edge)など、ブラウザからファイルへ直接書き込める環境での保存先。
+// 一度決めたら以降は同じファイルを黙って上書きする（新しいファイルを増やさない）。
+// 別のログを読み込んだときは、前のファイルを壊さないよう必ずnullに戻すこと。
+let saveFileHandle = null;
 
 function messagePassesFilter(msg) {
   if (currentSpeakerFilter !== "all" && msg.speaker !== currentSpeakerFilter) return false;
@@ -426,6 +602,8 @@ function renderLoadSection() {
 el.btnLoadExpand.addEventListener("click", () => {
   loadSectionExpanded = true;
   renderLoadSection();
+  // パネルを開いたときにも、他のログの自動保存を選べるように一覧を作り直す
+  renderRestoreList();
 });
 
 /* ============================================================
@@ -455,9 +633,85 @@ function renderAll() {
   }
 
   renderLoadSection();
+  renderRestoreList();
   updateSpeakerFilterOptions();
   renderList();
   renderBottomBar();
+
+  // 発言を変更する操作はいずれも最終的にここを通るので、自動保存はここで一括して予約する
+  // （並べ替えだけは一覧を作り直さないため、moveMessage側でも呼んでいる）
+  scheduleAutoSave();
+}
+
+function renderRestoreList() {
+  // 読み込みパネルが出ているときだけ案内する（読み込み直後の畳まれた状態では出さない）。
+  // 編集中のログ自身は、いま画面に出ているものなので一覧から除く。
+  const showPanel = !el.loadFull.hidden;
+  const currentKey = state.messages.length > 0 ? currentAutoSaveKey() : null;
+  const entries = showPanel ? readAutoSaveIndex().filter((e) => e.key !== currentKey) : [];
+
+  el.restoreList.innerHTML = "";
+  if (entries.length === 0) {
+    el.restoreNotice.hidden = true;
+    return;
+  }
+
+  entries.forEach((entry) => el.restoreList.appendChild(buildRestoreItem(entry)));
+  el.restoreNotice.hidden = false;
+}
+
+function buildRestoreItem(entry) {
+  const name = entry.loadedFileName || entry.key || "読み込んだログ";
+
+  const li = document.createElement("li");
+  li.className = "restore-item";
+
+  const info = document.createElement("div");
+  info.className = "restore-item__info";
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "restore-item__name";
+  nameEl.textContent = name;
+  info.appendChild(nameEl);
+
+  const metaEl = document.createElement("span");
+  metaEl.className = "restore-item__meta";
+  metaEl.textContent =
+    `${entry.count || 0} 件 / ` + (entry.savedAt ? formatCompactDate(entry.savedAt) : "日時不明");
+  info.appendChild(metaEl);
+
+  li.appendChild(info);
+
+  const actions = document.createElement("div");
+  actions.className = "restore-item__actions";
+
+  const restoreBtn = document.createElement("button");
+  restoreBtn.type = "button";
+  restoreBtn.className = "btn btn--primary btn--small";
+  restoreBtn.textContent = "再開";
+  restoreBtn.addEventListener("click", () => restoreFromAutoSave(entry.id));
+  actions.appendChild(restoreBtn);
+
+  const discardBtn = document.createElement("button");
+  discardBtn.type = "button";
+  discardBtn.className = "btn btn--secondary btn--small";
+  discardBtn.textContent = "破棄";
+  discardBtn.addEventListener("click", () => {
+    if (!window.confirm(`「${name}」の自動保存を破棄します。よろしいですか？`)) return;
+    discardAutoSave(entry.id);
+  });
+  actions.appendChild(discardBtn);
+
+  li.appendChild(actions);
+  return li;
+}
+
+// 自動保存の一覧は横幅が狭いので、今年のものは年を省いて短く出す
+function formatCompactDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const md = `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return d.getFullYear() === new Date().getFullYear() ? md : `${d.getFullYear()}/${md}`;
 }
 
 function formatDisplayDate(iso) {
@@ -712,6 +966,7 @@ function moveMessage(index, offset) {
   }
 
   renderBottomBar();
+  scheduleAutoSave();
 
   const cardEl = findCardEl(item.id);
   if (cardEl) cardEl.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -1141,14 +1396,83 @@ function downloadTextFile(fileName, content, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-function saveTemp() {
+// PCの上書き保存で使う、日時を含まない固定のファイル名。
+// 中身が実際に上書きされていく1つの作業用ファイルなので、名前も変えない。
+// 元のココフォリアのファイル名を基準にするため、保存ファイルを読み直しても名前が伸びていかない。
+function buildOverwriteFileName() {
+  const base = stripExtension(state.meta.sourceFileName || state.loadedFileName || "ccfolia-log");
+  return `${base}_編集中.html`;
+}
+
+async function saveTemp() {
   const html = buildHybridHtml();
+
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      if (!saveFileHandle) {
+        saveFileHandle = await window.showSaveFilePicker({
+          suggestedName: buildOverwriteFileName(),
+          types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
+        });
+      }
+      const writable = await saveFileHandle.createWritable();
+      await writable.write(html);
+      await writable.close();
+      el.saveTempStatus.textContent = `${saveFileHandle.name} に保存しました。次からは同じファイルに上書きされます。`;
+      renderAll();
+      return;
+    } catch (e) {
+      // 保存ダイアログを閉じただけなら何もしない
+      if (e && e.name === "AbortError") return;
+      // 権限切れ・削除などで書けなくなった場合は保存先を忘れ、ダウンロードで保存する
+      saveFileHandle = null;
+      console.warn("ファイルへの上書き保存に失敗したため、ダウンロードで保存します:", e);
+    }
+  }
+
   const fileName = buildSavedFileName();
   downloadTextFile(fileName, html, "text/html");
+  el.saveTempStatus.textContent = `${fileName} を保存しました。`;
   renderAll();
 }
 
 el.btnSaveTemp.addEventListener("click", saveTemp);
+
+/* ============================================================
+ * 共有シートで保存（iPhone・iPad向け）
+ * できるのは「保存先を選ぶ」ことだけ。
+ * iOSは同名ファイルがあっても置き換えを確認せず別名で保存するため、
+ * 上書きはできない（実機で確認済み）。そのため、ファイル名は
+ * 「一時保存」と同じ日時つきにして、どれがいつの保存か分かるようにする。
+ * ========================================================== */
+
+function canShareHtmlFile() {
+  if (typeof navigator.share !== "function" || typeof navigator.canShare !== "function") return false;
+  try {
+    return navigator.canShare({ files: [new File(["<html></html>"], "test.html", { type: "text/html" })] });
+  } catch (e) {
+    return false;
+  }
+}
+
+async function shareTemp() {
+  const fileName = buildSavedFileName();
+  // navigator.share はユーザー操作の直後に呼ぶ必要があるので、ここまでは同期処理のままにする
+  const file = new File([buildHybridHtml()], fileName, { type: "text/html" });
+
+  try {
+    await navigator.share({ files: [file] });
+    el.saveTempStatus.textContent = `${fileName} を共有しました。`;
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    el.saveTempStatus.textContent = "共有できませんでした。「一時保存（HTML）」をお試しください。";
+    console.warn("共有に失敗しました:", e);
+  }
+  renderAll();
+}
+
+el.btnShareTemp.addEventListener("click", shareTemp);
+el.btnShareTemp.hidden = !canShareHtmlFile();
 
 /* ============================================================
  * Markdown書き出し（5.5章・7章）
@@ -1272,3 +1596,6 @@ el.fileInput.addEventListener("change", () => {
 
   el.fileInput.value = "";
 });
+
+// 起動時：前回までの編集内容が残っていれば復元を案内する
+renderRestoreList();
