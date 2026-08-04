@@ -56,6 +56,8 @@ const state = {
     sourceFileName: null,
   },
   loadedFileName: null,
+  // プレビュー用HTMLでKP・PLとして表示する発言者名（本文の書き出し中は保持し、ファイルの読み込み直しでは変わらない）
+  previewRoles: { kp: ["KP"], pl: ["PL"] },
 };
 
 /* ============================================================
@@ -448,6 +450,12 @@ const el = {
   restoreNotice: document.getElementById("restore-notice"),
   restoreList: document.getElementById("restore-list"),
   exportFormatSelect: document.getElementById("export-format-select"),
+  exportFormatNote: document.getElementById("export-format-note"),
+  btnManagePreviewRoles: document.getElementById("btn-manage-preview-roles"),
+  previewRoleOverlay: document.getElementById("preview-role-overlay"),
+  previewRoleOverlayBackdrop: document.getElementById("preview-role-overlay-backdrop"),
+  previewRoleList: document.getElementById("preview-role-list"),
+  btnClosePreviewRoles: document.getElementById("btn-close-preview-roles"),
   btnCopyExport: document.getElementById("btn-copy-export"),
   btnDownloadExport: document.getElementById("btn-download-export"),
   exportStatus: document.getElementById("export-status"),
@@ -1530,8 +1538,9 @@ function buildExportLines(markdownStyle) {
       lines.push("");
     }
     const flatText = m.text.replace(/\n/g, " ");
-    const noEmojiSpeakers = ["KP", "PL"];
-    const emojiPrefix = noEmojiSpeakers.includes(m.speaker.trim()) ? "" : `${nearestColorEmoji(m.color)} `;
+    const trimmedSpeaker = m.speaker.trim();
+    const isKpOrPl = state.previewRoles.kp.includes(trimmedSpeaker) || state.previewRoles.pl.includes(trimmedSpeaker);
+    const emojiPrefix = isKpOrPl ? "" : `${nearestColorEmoji(m.color)} `;
     const speakerLabel = markdownStyle ? `**${m.speaker}**` : m.speaker;
     lines.push(`${emojiPrefix}${speakerLabel}：${flatText}`);
     prevWasMessage = true;
@@ -1548,12 +1557,226 @@ function buildPlainText() {
   return buildExportLines(false);
 }
 
+/* ============================================================
+ * プレビュー用HTMLの生成（Notion貼り付け・閲覧専用、編集には戻せない）
+ * ========================================================== */
+
+// 自己完結スタイル。Notion貼り付け・外部ホスティングどちらでも崩れないよう、
+// 外部リソース・スクリプトを一切使わずインラインCSSのみで完結させる。
+// フォント・文字サイズは本ツールの画面表示（style.css の body / .msg-card__text）に合わせている。
+const PREVIEW_HTML_STYLE = `
+  :root { color-scheme: light dark; font-size: 17px; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: #fbfaf8;
+    color: #2b2b2b;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    font-size: 1rem;
+    line-height: 1.8;
+    -webkit-text-size-adjust: 100%;
+  }
+  .ccpv-wrap {
+    max-width: 640px;
+    margin: 0 auto;
+  }
+  .ccpv-line {
+    margin: 0 0 0.9em;
+    padding-left: 10px;
+    border-left: 3px solid transparent;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+  .ccpv-speaker {
+    font-weight: 700;
+    color: #555;
+  }
+  .ccpv-role-kp.ccpv-tab-main {
+    border-left-color: #3b6fa8;
+  }
+  .ccpv-role-kp > .ccpv-speaker {
+    color: #3b6fa8;
+  }
+  .ccpv-role-pl.ccpv-tab-main {
+    border-left-color: #a85a3b;
+  }
+  .ccpv-role-pl > .ccpv-speaker {
+    color: #a85a3b;
+  }
+  .ccpv-tab-other {
+    color: #999;
+  }
+  .ccpv-tab-other .ccpv-speaker {
+    color: #999 !important;
+  }
+  .ccpv-tab-info {
+    margin-left: 1.6em;
+    padding: 0.5em 0.9em;
+    border-left: 3px solid #d8d3c8;
+    background: rgba(0, 0, 0, 0.035);
+    color: #4a4a4a;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16181d; color: #e7e9ee; }
+    .ccpv-speaker { color: #c7cbd4; }
+    .ccpv-role-kp.ccpv-tab-main { border-left-color: #6ea3e0; }
+    .ccpv-role-kp > .ccpv-speaker { color: #6ea3e0; }
+    .ccpv-role-pl.ccpv-tab-main { border-left-color: #e0916e; }
+    .ccpv-role-pl > .ccpv-speaker { color: #e0916e; }
+    .ccpv-tab-other { color: #6b7078; }
+    .ccpv-tab-other .ccpv-speaker { color: #6b7078 !important; }
+    .ccpv-tab-info {
+      border-left-color: #3a3d44;
+      background: rgba(255, 255, 255, 0.04);
+      color: #c7cbd4;
+    }
+  }
+`;
+
+// タブは自由記述だが、"main" "info" "other"（大文字小文字は問わない）という名前を
+// 特別扱いする。それ以外の名前のタブはmainと同じ通常表示にする。
+// normalize("NFKC")で全角英字（日本語入力中に打った "info" など）も半角と同じ扱いにする。
+// ココフォリアの書き出しHTMLは既定のタブ名が "[main]" "[info]" "[other]" のように
+// 角括弧付きなので、丸ごと囲われている場合は括弧を外してから判定する。
+function getTabCategory(tab) {
+  let t = tab.trim().normalize("NFKC").toLowerCase();
+  const bracketed = t.match(/^\[(.+)\]$/);
+  if (bracketed) t = bracketed[1];
+  if (t === "info") return "info";
+  if (t === "other") return "other";
+  return "main";
+}
+
+// 1メッセージ分のHTML。
+// KP/PL扱いにする発言者は、サイドバーの「KP/PL表示を設定」で選んだ発言者名（state.previewRoles）で判定する。
+// サイコロ発言(isDiceRoll)も特別扱いせず、他の発言と同じ見た目にする（ト書き調の統一感を優先）。
+function buildPreviewLineHtml(msg) {
+  const category = getTabCategory(msg.tab);
+  const textHtml = escapeHtml(msg.text).replace(/\n/g, "<br>");
+
+  // infoタブ：話者名を出さず、引用ブロックのようにインデントを下げて表示する
+  if (category === "info") {
+    return `<p class="ccpv-line ccpv-tab-info">${textHtml}</p>`;
+  }
+
+  const trimmedSpeaker = msg.speaker.trim();
+  const isKp = state.previewRoles.kp.includes(trimmedSpeaker);
+  const isPl = state.previewRoles.pl.includes(trimmedSpeaker);
+
+  const classes = ["ccpv-line", `ccpv-tab-${category}`];
+  if (isKp) classes.push("ccpv-role-kp");
+  if (isPl) classes.push("ccpv-role-pl");
+
+  // 個別話者（KP/PL以外）は、グレー表示（otherタブ）でないときだけ本人の色をインラインで反映する。
+  const speakerStyle =
+    !isKp && !isPl && category !== "other" ? ` style="color:${escapeHtml(normalizeColor(msg.color))};"` : "";
+
+  return `<p class="${classes.join(" ")}"><span class="ccpv-speaker"${speakerStyle}>${escapeHtml(
+    msg.speaker
+  )}</span>：${textHtml}</p>`;
+}
+
+function buildPreviewHtml() {
+  const bodyHtml = state.messages.map((m) => buildPreviewLineHtml(m)).join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>セッションログ</title>
+    <style>${PREVIEW_HTML_STYLE}</style>
+  </head>
+  <body>
+    <div class="ccpv-wrap">
+${bodyHtml}
+    </div>
+  </body>
+</html>
+`;
+}
+
 function getExportContent() {
   if (el.exportFormatSelect.value === "text") {
-    return { content: buildPlainText(), ext: "txt", mime: "text/plain", label: "テキスト" };
+    return { content: buildPlainText(), ext: "txt", mime: "text/plain", label: "テキスト", fileNameSuffix: "" };
   }
-  return { content: buildMarkdown(), ext: "md", mime: "text/markdown", label: "Markdown" };
+  if (el.exportFormatSelect.value === "preview-html") {
+    return { content: buildPreviewHtml(), ext: "html", mime: "text/html", label: "プレビュー用HTML", fileNameSuffix: "_preview" };
+  }
+  return { content: buildMarkdown(), ext: "md", mime: "text/markdown", label: "Markdown", fileNameSuffix: "" };
 }
+
+function updateExportFormatNote() {
+  const isPreviewHtml = el.exportFormatSelect.value === "preview-html";
+  el.exportFormatNote.textContent = isPreviewHtml
+    ? "※閲覧専用です。このツールへの読み込みには使えません。ダウンロードしてNotionなどに取り込んでください。"
+    : "";
+  // プレビュー用HTMLはNotionへの貼り付け・ダウンロード専用なので、コピーは提供しない
+  el.btnCopyExport.hidden = isPreviewHtml;
+}
+el.exportFormatSelect.addEventListener("change", updateExportFormatNote);
+updateExportFormatNote();
+
+// プレビュー用HTMLでKP・PLとして表示する発言者を選ぶ一覧。
+// 1人の発言者がKPとPLの両方に入らないよう、片方を選ぶともう片方は自動で外す。
+function togglePreviewRole(speaker, role) {
+  const other = role === "kp" ? "pl" : "kp";
+  const list = state.previewRoles[role];
+  const idx = list.indexOf(speaker);
+  if (idx === -1) {
+    list.push(speaker);
+    const otherIdx = state.previewRoles[other].indexOf(speaker);
+    if (otherIdx !== -1) state.previewRoles[other].splice(otherIdx, 1);
+  } else {
+    list.splice(idx, 1);
+  }
+}
+
+function renderPreviewRoleList() {
+  const speakers = getKnownSpeakers();
+  el.previewRoleList.innerHTML = "";
+
+  if (speakers.length === 0) {
+    el.previewRoleList.innerHTML = `<p class="panel__desc">まだ発言者がいません。</p>`;
+    return;
+  }
+
+  speakers.forEach(({ speaker, color }) => {
+    const row = document.createElement("div");
+    row.className = "preview-role-row";
+    row.innerHTML = `
+      <span class="color-dot" style="background:${escapeHtml(normalizeColor(color))}"></span>
+      <span class="preview-role-row__name">${escapeHtml(speaker)}</span>
+      <label class="preview-role-row__check">
+        <input type="checkbox" data-role="kp" ${state.previewRoles.kp.includes(speaker) ? "checked" : ""} /> KP
+      </label>
+      <label class="preview-role-row__check">
+        <input type="checkbox" data-role="pl" ${state.previewRoles.pl.includes(speaker) ? "checked" : ""} /> PL
+      </label>
+    `;
+
+    row.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        togglePreviewRole(speaker, cb.dataset.role);
+        renderPreviewRoleList();
+      });
+    });
+
+    el.previewRoleList.appendChild(row);
+  });
+}
+
+el.btnManagePreviewRoles.addEventListener("click", () => {
+  renderPreviewRoleList();
+  el.previewRoleOverlay.hidden = false;
+});
+el.btnClosePreviewRoles.addEventListener("click", () => {
+  el.previewRoleOverlay.hidden = true;
+});
+el.previewRoleOverlayBackdrop.addEventListener("click", () => {
+  el.previewRoleOverlay.hidden = true;
+});
 
 el.btnCopyExport.addEventListener("click", async () => {
   const { content, label } = getExportContent();
@@ -1566,9 +1789,9 @@ el.btnCopyExport.addEventListener("click", async () => {
 });
 
 el.btnDownloadExport.addEventListener("click", () => {
-  const { content, ext, mime } = getExportContent();
+  const { content, ext, mime, fileNameSuffix } = getExportContent();
   const base = stripExtension(state.loadedFileName || "ccfolia-log");
-  downloadTextFile(`${base}.${ext}`, content, mime);
+  downloadTextFile(`${base}${fileNameSuffix}.${ext}`, content, mime);
   el.exportStatus.textContent = "ダウンロードしました。";
 });
 
