@@ -132,13 +132,32 @@ function getImageDataUrl(id) {
   return img ? img.dataUrl : null;
 }
 
-// 発言編集フォームからの新規アップロード用。既存プールに同じ画像があれば使い回す。
-function addImageToPool(dataUrl) {
-  const existing = state.images.find((img) => img.dataUrl === dataUrl);
-  if (existing) return existing.id;
+// 画像は発言者ごとの「持ち物」として管理する（表情に名前を付けて管理できるように）。
+// その発言者が今まで持っている表情の数から、次の既定名（表情1、表情2…）を決める。
+function nextDefaultImageName(speaker) {
+  return `表情${getSpeakerImageIds(speaker).length + 1}`;
+}
+
+// 発言者に新しい表情差分画像を1件追加する（既存の発言への割り当ては行わない）
+function addSpeakerImage(speaker, dataUrl, name) {
   const id = uid();
-  state.images.push({ id, dataUrl });
+  state.images.push({ id, dataUrl, name: name || nextDefaultImageName(speaker), speaker });
+  scheduleAutoSave();
   return id;
+}
+
+// 発言編集フォームからの新規アップロード用。同じ発言者・同じ画像が既にあれば使い回す。
+function addImageToPool(dataUrl, speaker) {
+  const existing = state.images.find((img) => img.speaker === speaker && img.dataUrl === dataUrl);
+  if (existing) return existing.id;
+  return addSpeakerImage(speaker, dataUrl);
+}
+
+function renameImage(imageId, name) {
+  const img = getImageById(imageId);
+  if (!img) return;
+  img.name = name.trim();
+  scheduleAutoSave();
 }
 
 function readFileAsDataUrl(file) {
@@ -160,17 +179,20 @@ function setSpeakerDisplayType(speaker, type) {
   renderAll();
 }
 
-// その発言者が実際に使っている画像を、初出順・重複なしで返す
+// その発言者が持っている画像を、追加した順に返す（現在どの発言にも使われていない
+// 画像も、管理対象として持ち主基準でここに含める）
 function getSpeakerImageIds(speaker) {
-  const ids = [];
-  const seen = new Set();
+  return state.images.filter((img) => img.speaker === speaker).map((img) => img.id);
+}
+
+// 元データに画像を持たなかった発言者（地の文扱い）に、初めて画像を追加したときの処理。
+// その発言者の発言すべてに同じ画像を割り当て、キャラクター発言に切り替える。
+function insertFirstImageForSpeaker(speaker, dataUrl) {
+  const id = addSpeakerImage(speaker, dataUrl);
   state.messages.forEach((m) => {
-    if (m.speaker === speaker && m.iconId && !seen.has(m.iconId)) {
-      seen.add(m.iconId);
-      ids.push(m.iconId);
-    }
+    if (m.speaker === speaker) m.iconId = id;
   });
-  return ids;
+  setSpeakerDisplayType(speaker, "character");
 }
 
 /* ============================================================
@@ -233,14 +255,22 @@ function parseAvatarImageMap(doc) {
 function parseCcfoliaHtmlNew(doc, articles) {
   const avatarMap = parseAvatarImageMap(doc);
   const images = [];
-  const imageIdByDataUrl = new Map();
+  const imageIdByKey = new Map(); // speaker -> (dataUrl -> id)（画像は発言者ごとの持ち物として管理する）
+  const speakerImageCounters = new Map();
   const speakerHasImage = new Set();
 
-  function registerImage(dataUrl) {
-    if (imageIdByDataUrl.has(dataUrl)) return imageIdByDataUrl.get(dataUrl);
+  function registerImage(dataUrl, speaker) {
+    let bucket = imageIdByKey.get(speaker);
+    if (!bucket) {
+      bucket = new Map();
+      imageIdByKey.set(speaker, bucket);
+    }
+    if (bucket.has(dataUrl)) return bucket.get(dataUrl);
+    const count = (speakerImageCounters.get(speaker) || 0) + 1;
+    speakerImageCounters.set(speaker, count);
     const id = uid();
-    images.push({ id, dataUrl });
-    imageIdByDataUrl.set(dataUrl, id);
+    images.push({ id, dataUrl, name: `表情${count}`, speaker });
+    bucket.set(dataUrl, id);
     return id;
   }
 
@@ -292,7 +322,7 @@ function parseCcfoliaHtmlNew(doc, articles) {
       const idx = imgClass ? imgClass.replace("avatar-image-", "") : null;
       const dataUrl = idx !== null ? avatarMap.get(idx) : null;
       if (dataUrl) {
-        iconId = registerImage(dataUrl);
+        iconId = registerImage(dataUrl, speaker);
         if (speaker) speakerHasImage.add(speaker);
       }
     }
@@ -395,9 +425,28 @@ function normalizeImages(list) {
     let id = typeof img.id === "string" && img.id ? img.id : uid();
     if (seenIds.has(id)) id = uid();
     seenIds.add(id);
-    result.push({ id, dataUrl });
+    result.push({ id, dataUrl, name: toText(img.name), speaker: toText(img.speaker) });
   });
   return result;
+}
+
+// 本機能追加より前に保存されたデータには画像の持ち主（speaker）・名前が無いため、
+// その画像を実際に使っている発言から持ち主を補い、名前が無ければ既定名を振る。
+// どの発言からも使われていない画像は持ち主なし（""）として扱う。
+function backfillImageOwnership(images, messages) {
+  const counters = new Map();
+  images.forEach((img) => {
+    if (!img.speaker) {
+      const owner = messages.find((m) => m.iconId === img.id);
+      img.speaker = owner ? owner.speaker : "";
+    }
+    if (!img.name) {
+      const count = (counters.get(img.speaker) || 0) + 1;
+      counters.set(img.speaker, count);
+      img.name = `表情${count}`;
+    }
+  });
+  return images;
 }
 
 // 外部（保存HTML・ブラウザ内の自動保存）から読み込んだ発言の配列を、
@@ -467,6 +516,7 @@ function parseSavedHtml(htmlString) {
   const images = normalizeImages(data.images);
   const imageIdSet = new Set(images.map((img) => img.id));
   const messages = normalizeLoadedMessages(data.messages, imageIdSet);
+  backfillImageOwnership(images, messages);
 
   return {
     messages,
@@ -666,6 +716,7 @@ function restoreFromAutoSave(id) {
   const images = normalizeImages(data.images);
   const imageIdSet = new Set(images.map((img) => img.id));
   const messages = normalizeLoadedMessages(data.messages, imageIdSet);
+  backfillImageOwnership(images, messages);
 
   state.messages = messages;
   state.images = images;
@@ -1062,7 +1113,10 @@ function buildMessageCard(msg, index) {
     (msg.isDiceRoll ? `<span class="msg-card__dice-badge">🎲 ダイスロール</span>` : "");
   card.appendChild(meta);
 
-  if (getSpeakerDisplayType(msg.speaker) === "character") {
+  // ダイスロールはキャラクター発言でも吹き出しにせず、地の文と同じ見た目にする
+  const useCharacterBubble = !msg.isDiceRoll && getSpeakerDisplayType(msg.speaker) === "character";
+
+  if (useCharacterBubble) {
     card.classList.add("msg-card--character");
 
     const bubbleWrap = document.createElement("div");
@@ -1489,9 +1543,10 @@ function renderIconPicker(speaker) {
       .map((id) => {
         const img = getImageById(id);
         const bg = img ? escapeHtml(img.dataUrl) : "";
+        const label = img && img.name ? img.name : "名前未設定の表情";
         return `<button type="button" class="icon-picker__item icon-picker__item--image${
           selectedIconId === id ? " is-selected" : ""
-        }" data-action="pick-icon" data-icon-id="${escapeHtml(id)}" style="background-image:url('${bg}')" aria-label="この画像を選ぶ"></button>`;
+        }" data-action="pick-icon" data-icon-id="${escapeHtml(id)}" style="background-image:url('${bg}')" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}を選ぶ"></button>`;
       })
       .join("");
 
@@ -1534,7 +1589,7 @@ el.fieldIconUpload.addEventListener("change", async () => {
   if (!file) return;
   try {
     const dataUrl = await readFileAsDataUrl(file);
-    formContext.selectedIconId = addImageToPool(dataUrl);
+    formContext.selectedIconId = addImageToPool(dataUrl, getFormSpeakerValue());
     renderIconPicker(getFormSpeakerValue());
   } catch (e) {
     window.alert("画像の読み込みに失敗しました。");
@@ -1650,13 +1705,50 @@ function recolorSpeaker(speaker, newColor) {
 function buildSpeakerImageItemHtml(imageId) {
   const img = getImageById(imageId);
   const bg = img ? escapeHtml(img.dataUrl) : "";
+  const name = img ? escapeHtml(img.name || "") : "";
   return `
     <div class="speaker-image-item">
       <button type="button" class="speaker-image-thumb" style="background-image:url('${bg}')" data-action="view-image" data-image-id="${escapeHtml(imageId)}" aria-label="拡大表示"></button>
+      <input type="text" class="speaker-image-name" placeholder="表情の名前" value="${name}" data-action="rename-image" data-image-id="${escapeHtml(imageId)}" />
       <button type="button" class="btn btn--secondary btn--small" data-action="replace-image" data-image-id="${escapeHtml(imageId)}">差し替える</button>
       <input type="file" accept="image/*" hidden />
     </div>
   `;
+}
+
+// 発言者行の画像まわりのセクション。
+// ・キャラクター発言：既存の表情一覧＋「新しい表情を追加」
+// ・地の文で画像を1枚も持っていない：最初の画像を挿入する導線（挿入するとキャラクター発言に切り替わる）
+// ・地の文だが過去に画像を持っている：件数だけ案内（切り替えれば表示される）
+function buildSpeakerImageSectionHtml(speaker, displayType, imageIds) {
+  if (displayType === "character") {
+    return `<div class="speaker-image-gallery">
+      <p class="speaker-image-gallery__note">表情差分（元画像は小さいため拡大表示はぼやけます。タップで拡大、名前を付けて管理できます。「差し替える」で画像を変更、下のボタンで表情を追加できます）</p>
+      <div class="speaker-image-list">
+        ${
+          imageIds.length > 0
+            ? imageIds.map(buildSpeakerImageItemHtml).join("")
+            : `<p class="speaker-image-gallery__empty">まだ画像がありません。下のボタンから追加できます。</p>`
+        }
+      </div>
+      <label class="btn btn--secondary btn--small">
+        ＋ 新しい表情を追加
+        <input type="file" accept="image/*" hidden data-action="add-image" />
+      </label>
+    </div>`;
+  }
+
+  if (imageIds.length === 0) {
+    return `<div class="speaker-image-gallery">
+      <p class="speaker-image-gallery__note">この発言者には元データに画像がありません。画像を追加すると、この発言者のすべての発言に同じ画像が適用され、キャラクター発言（吹き出し表示）に切り替わります。</p>
+      <label class="btn btn--secondary btn--small">
+        ＋ 画像を追加する
+        <input type="file" accept="image/*" hidden data-action="insert-first-image" />
+      </label>
+    </div>`;
+  }
+
+  return `<p class="speaker-image-gallery__hint">画像 ${imageIds.length} 件を保持しています（「キャラクター発言」に切り替えると表示されます）</p>`;
 }
 
 async function replaceImageFromFile(imageId, file) {
@@ -1717,20 +1809,7 @@ function renderSpeakerColorList() {
         <button type="button" class="speaker-type-btn${displayType === "narration" ? " is-active" : ""}" data-action="set-type" data-type="narration">地の文</button>
       </div>
 
-      ${
-        displayType === "character"
-          ? `<div class="speaker-image-gallery">
-              <p class="speaker-image-gallery__note">表情差分（元画像は小さいため拡大表示はぼやけます。タップで拡大、「差し替える」で別の画像に変更できます）</p>
-              <div class="speaker-image-list">
-                ${
-                  imageIds.length > 0
-                    ? imageIds.map(buildSpeakerImageItemHtml).join("")
-                    : `<p class="speaker-image-gallery__empty">まだ画像がありません。発言の編集画面から追加できます。</p>`
-                }
-              </div>
-            </div>`
-          : ""
-      }
+      ${buildSpeakerImageSectionHtml(speaker, displayType, imageIds)}
     `;
 
     const editor = row.querySelector(".speaker-color-row__editor");
@@ -1773,6 +1852,46 @@ function renderSpeakerColorList() {
         fileInput.value = "";
       });
     });
+
+    row.querySelectorAll('[data-action="rename-image"]').forEach((input) => {
+      input.addEventListener("change", () => renameImage(input.dataset.imageId, input.value));
+    });
+
+    // 既存キャラクターへの表情追加：一覧を作り直すだけでよい（発言への割り当てはしない）
+    const addImageInput = row.querySelector('[data-action="add-image"]');
+    if (addImageInput) {
+      addImageInput.addEventListener("change", async () => {
+        const file = addImageInput.files[0];
+        if (!file) return;
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          addSpeakerImage(speaker, dataUrl);
+          renderSpeakerColorList();
+        } catch (e) {
+          window.alert("画像の読み込みに失敗しました。");
+          console.error(e);
+        }
+        addImageInput.value = "";
+      });
+    }
+
+    // 元データに画像を持たない発言者への初めての画像挿入：全発言に反映し、キャラクター発言に切り替える
+    const insertFirstInput = row.querySelector('[data-action="insert-first-image"]');
+    if (insertFirstInput) {
+      insertFirstInput.addEventListener("change", async () => {
+        const file = insertFirstInput.files[0];
+        if (!file) return;
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          insertFirstImageForSpeaker(speaker, dataUrl);
+          renderSpeakerColorList();
+        } catch (e) {
+          window.alert("画像の読み込みに失敗しました。");
+          console.error(e);
+        }
+        insertFirstInput.value = "";
+      });
+    }
 
     el.speakerColorList.appendChild(row);
   });
@@ -2221,7 +2340,7 @@ function buildPreviewLineHtml(msg) {
   const isKp = state.previewRoles.kp.includes(trimmedSpeaker);
   const isPl = state.previewRoles.pl.includes(trimmedSpeaker);
 
-  if (getSpeakerDisplayType(msg.speaker) === "character") {
+  if (!msg.isDiceRoll && getSpeakerDisplayType(msg.speaker) === "character") {
     const dataUrl = msg.iconId ? getImageDataUrl(msg.iconId) : null;
     const avatarStyle = dataUrl
       ? `background-image:url('${escapeHtml(dataUrl)}');`

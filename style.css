@@ -632,6 +632,27 @@ main {
   cursor: pointer;
   padding: 0;
 }
+.speaker-image-name {
+  width: 72px;
+  font-size: 0.75rem;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: center;
+}
+.speaker-image-gallery__hint {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+}
+.speaker-image-gallery label.btn {
+  margin-top: 10px;
+  display: inline-block;
+}
 
 /* 表情差分画像の拡大プレビュー */
 .overlay__sheet--image {
