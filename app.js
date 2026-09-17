@@ -49,7 +49,9 @@ function diceOutcomeGroup(key) {
  * ========================================================== */
 
 const state = {
-  messages: [],   // { id, tab, speaker, color, text, isDiceRoll }
+  messages: [],   // { id, tab, channel, isSystem, speaker, color, text, isDiceRoll, diceOutcome, iconId }
+  images: [],     // 表情差分画像のプール { id, dataUrl }
+  speakerSettings: {}, // 発言者名 -> { displayType: "character" | "narration" }
   meta: {
     schemaVersion: SCHEMA_VERSION,
     savedAt: null,
@@ -118,6 +120,60 @@ function stripExtension(fileName) {
 }
 
 /* ============================================================
+ * 表情差分画像のプール・発言者ごとの表示方法
+ * ========================================================== */
+
+function getImageById(id) {
+  return state.images.find((img) => img.id === id) || null;
+}
+
+function getImageDataUrl(id) {
+  const img = getImageById(id);
+  return img ? img.dataUrl : null;
+}
+
+// 発言編集フォームからの新規アップロード用。既存プールに同じ画像があれば使い回す。
+function addImageToPool(dataUrl) {
+  const existing = state.images.find((img) => img.dataUrl === dataUrl);
+  if (existing) return existing.id;
+  const id = uid();
+  state.images.push({ id, dataUrl });
+  return id;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function getSpeakerDisplayType(speaker) {
+  const s = state.speakerSettings[speaker];
+  return s && s.displayType === "character" ? "character" : "narration";
+}
+
+function setSpeakerDisplayType(speaker, type) {
+  state.speakerSettings[speaker] = { displayType: type === "character" ? "character" : "narration" };
+  renderAll();
+}
+
+// その発言者が実際に使っている画像を、初出順・重複なしで返す
+function getSpeakerImageIds(speaker) {
+  const ids = [];
+  const seen = new Set();
+  state.messages.forEach((m) => {
+    if (m.speaker === speaker && m.iconId && !seen.has(m.iconId)) {
+      seen.add(m.iconId);
+      ids.push(m.iconId);
+    }
+  });
+  return ids;
+}
+
+/* ============================================================
  * ダイスロール自動判定（6章）
  * 「数字+D+数字」（大小文字区別なし）と「＞」を含むかどうかで判定
  * ========================================================== */
@@ -143,8 +199,140 @@ function extractSpanText(spanEl) {
     .trim();
 }
 
+// ダイスロール本文の末尾（最後の＞の後）から成否を推測する現行ロジック。
+// 新形式では .roll-result のclass修飾から直接判定できるが、それが取れない場合
+// （旧形式・class修飾なしの単純ロール等）のフォールバックとして使う。
+function classifyDiceOutcomeFromText(text) {
+  return classifyDiceOutcome(text);
+}
+
+// ココフォリアの書き出しHTMLは新形式（article.message ベース）と、
+// 過去の旧形式（p[style*="color:"] ベース）のどちらもありうるため、
+// 新形式のセレクタで1件もマッチしなければ旧形式として解析する。
 function parseCcfoliaHtml(htmlString) {
   const doc = new DOMParser().parseFromString(htmlString, "text/html");
+  const articles = doc.querySelectorAll("article.message");
+  return articles.length > 0 ? parseCcfoliaHtmlNew(doc, articles) : parseCcfoliaHtmlLegacy(doc);
+}
+
+// <style>内の .avatar-image-N { background-image: url("data:...") } から
+// 表情差分画像のdata URIを取り出し、インデックス文字列(N) -> data URI の対応表を作る
+function parseAvatarImageMap(doc) {
+  const map = new Map();
+  const re = /\.avatar-image-(\d+)\s*\{[^}]*background-image:\s*url\((["']?)(data:[^"')]+)\2\)/g;
+  doc.querySelectorAll("style").forEach((styleEl) => {
+    const css = styleEl.textContent || "";
+    let m;
+    while ((m = re.exec(css))) {
+      map.set(m[1], m[3]);
+    }
+  });
+  return map;
+}
+
+function parseCcfoliaHtmlNew(doc, articles) {
+  const avatarMap = parseAvatarImageMap(doc);
+  const images = [];
+  const imageIdByDataUrl = new Map();
+  const speakerHasImage = new Set();
+
+  function registerImage(dataUrl) {
+    if (imageIdByDataUrl.has(dataUrl)) return imageIdByDataUrl.get(dataUrl);
+    const id = uid();
+    images.push({ id, dataUrl });
+    imageIdByDataUrl.set(dataUrl, id);
+    return id;
+  }
+
+  const messages = [];
+
+  articles.forEach((article) => {
+    const channel = article.getAttribute("data-channel") || "main";
+    const channelNameEl = article.querySelector(".channel-name");
+    const tab = (channelNameEl ? extractSpanText(channelNameEl) : "") || "[メイン]";
+
+    if (article.classList.contains("system")) {
+      const textEl = article.querySelector(".message-text");
+      messages.push({
+        id: uid(),
+        tab,
+        channel,
+        isSystem: true,
+        speaker: "",
+        color: DEFAULT_COLOR,
+        text: textEl ? extractSpanText(textEl) : "",
+        isDiceRoll: false,
+        diceOutcome: null,
+        iconId: null,
+      });
+      return;
+    }
+
+    const speakerEl = article.querySelector(".speaker");
+    const speaker = speakerEl ? extractSpanText(speakerEl) : "";
+    const speakerStyle = speakerEl ? speakerEl.getAttribute("style") || "" : "";
+    const colorMatch = speakerStyle.match(/--speaker-color:\s*(#[0-9a-fA-F]{6})/);
+    const color = normalizeColor(colorMatch ? colorMatch[1] : DEFAULT_COLOR);
+
+    const textEl = article.querySelector(".message-text");
+    const text = textEl ? extractSpanText(textEl) : "";
+
+    const rollEl = article.querySelector(".roll-result");
+    const isDiceRoll = !!rollEl;
+    let diceOutcome = null;
+    if (rollEl) {
+      const outcomeClass = Array.from(rollEl.classList).find((c) => c !== "roll-result");
+      diceOutcome = outcomeClass || classifyDiceOutcomeFromText(extractSpanText(rollEl));
+    }
+
+    let iconId = null;
+    const avatarEl = article.querySelector(".avatar");
+    if (avatarEl && !avatarEl.classList.contains("avatar-spacer")) {
+      const imgClass = Array.from(avatarEl.classList).find((c) => /^avatar-image-\d+$/.test(c));
+      const idx = imgClass ? imgClass.replace("avatar-image-", "") : null;
+      const dataUrl = idx !== null ? avatarMap.get(idx) : null;
+      if (dataUrl) {
+        iconId = registerImage(dataUrl);
+        if (speaker) speakerHasImage.add(speaker);
+      }
+    }
+
+    messages.push({
+      id: uid(),
+      tab,
+      channel,
+      isSystem: false,
+      speaker,
+      color,
+      text,
+      isDiceRoll,
+      diceOutcome,
+      iconId,
+    });
+  });
+
+  // 画像を1件でも使っていた発言者は「キャラクター発言」、一度も使っていない発言者
+  // （KP等）は「地の文」として初期分類する
+  const speakerSettings = {};
+  new Set(messages.map((m) => m.speaker).filter(Boolean)).forEach((speaker) => {
+    speakerSettings[speaker] = { displayType: speakerHasImage.has(speaker) ? "character" : "narration" };
+  });
+
+  return {
+    messages,
+    images,
+    speakerSettings,
+    meta: {
+      schemaVersion: SCHEMA_VERSION,
+      savedAt: null,
+      sourceFileName: null,
+    },
+  };
+}
+
+// 過去のココフォリア書き出し形式（<p style="color:..."><span>×3</span></p>）。
+// 画像・チャンネルIDなどの情報は元々存在しないため、既定値で埋める。
+function parseCcfoliaHtmlLegacy(doc) {
   const paragraphs = doc.querySelectorAll('p[style*="color:"]');
   const messages = [];
 
@@ -163,15 +351,21 @@ function parseCcfoliaHtml(htmlString) {
     messages.push({
       id: uid(),
       tab: tab || "[main]",
+      channel: null,
+      isSystem: false,
       speaker,
       color,
       text,
       isDiceRoll: detectDiceRoll(text),
+      diceOutcome: null,
+      iconId: null,
     });
   });
 
   return {
     messages,
+    images: [],
+    speakerSettings: {},
     meta: {
       schemaVersion: SCHEMA_VERSION,
       savedAt: null,
@@ -188,9 +382,28 @@ function findStateScript(doc) {
   return doc.getElementById(STATE_SCRIPT_ID);
 }
 
+// 外部（保存HTML・ブラウザ内の自動保存）から読み込んだ画像プールを、
+// アプリ内で扱える形に揃える。壊れたエントリは無視する。
+function normalizeImages(list) {
+  if (!Array.isArray(list)) return [];
+  const seenIds = new Set();
+  const result = [];
+  list.forEach((img) => {
+    if (!img || typeof img !== "object") return;
+    const dataUrl = typeof img.dataUrl === "string" ? img.dataUrl : "";
+    if (!dataUrl.startsWith("data:image/")) return;
+    let id = typeof img.id === "string" && img.id ? img.id : uid();
+    if (seenIds.has(id)) id = uid();
+    seenIds.add(id);
+    result.push({ id, dataUrl });
+  });
+  return result;
+}
+
 // 外部（保存HTML・ブラウザ内の自動保存）から読み込んだ発言の配列を、
 // アプリ内で扱える形に揃える。値の正規化とID重複の解消をここに集約する。
-function normalizeLoadedMessages(list) {
+function normalizeLoadedMessages(list, validImageIds) {
+  const imageIdSet = validImageIds instanceof Set ? validImageIds : new Set(validImageIds || []);
   // IDが重複していると、選択・編集が別の発言を巻き込むので振り直す
   const seenIds = new Set();
   return list
@@ -199,15 +412,40 @@ function normalizeLoadedMessages(list) {
       let id = typeof m.id === "string" && m.id ? m.id : uid();
       if (seenIds.has(id)) id = uid();
       seenIds.add(id);
+      const iconId = typeof m.iconId === "string" && imageIdSet.has(m.iconId) ? m.iconId : null;
       return {
         id,
         tab: toText(m.tab) || "[main]",
+        channel: typeof m.channel === "string" && m.channel ? m.channel : null,
+        isSystem: !!m.isSystem,
         speaker: toText(m.speaker),
         color: normalizeColor(m.color),
         text: toText(m.text),
         isDiceRoll: !!m.isDiceRoll,
+        diceOutcome: typeof m.diceOutcome === "string" ? m.diceOutcome : null,
+        iconId,
       };
     });
+}
+
+// 発言者ごとの表示方法（キャラクター発言／地の文）。保存データに残っていればそれを使い、
+// 無い発言者は「画像付きの発言を1件でも持っていればキャラクター発言」という既定ルールで補う。
+function normalizeSpeakerSettings(obj, messages) {
+  const knownSpeakers = new Set(messages.map((m) => m.speaker).filter(Boolean));
+  const settings = {};
+  if (obj && typeof obj === "object") {
+    Object.keys(obj).forEach((speaker) => {
+      if (!knownSpeakers.has(speaker)) return;
+      const entry = obj[speaker];
+      settings[speaker] = { displayType: entry && entry.displayType === "character" ? "character" : "narration" };
+    });
+  }
+  knownSpeakers.forEach((speaker) => {
+    if (settings[speaker]) return;
+    const hasIcon = messages.some((m) => m.speaker === speaker && m.iconId);
+    settings[speaker] = { displayType: hasIcon ? "character" : "narration" };
+  });
+  return settings;
 }
 
 function parseSavedHtml(htmlString) {
@@ -226,8 +464,14 @@ function parseSavedHtml(htmlString) {
   // 呼び出し元で通常のココフォリアHTMLとして解析させる
   if (!data || typeof data !== "object" || !Array.isArray(data.messages)) return null;
 
+  const images = normalizeImages(data.images);
+  const imageIdSet = new Set(images.map((img) => img.id));
+  const messages = normalizeLoadedMessages(data.messages, imageIdSet);
+
   return {
-    messages: normalizeLoadedMessages(data.messages),
+    messages,
+    images,
+    speakerSettings: normalizeSpeakerSettings(data.speakerSettings, messages),
     meta: {
       schemaVersion: data.schemaVersion || SCHEMA_VERSION,
       savedAt: typeof data.savedAt === "string" ? data.savedAt : null,
@@ -255,6 +499,8 @@ function loadFromHtmlString(htmlString, fileName) {
   }
 
   state.messages = result.messages;
+  state.images = result.images || [];
+  state.speakerSettings = result.speakerSettings || {};
   state.meta = result.meta;
   state.loadedFileName = fileName;
 
@@ -349,7 +595,12 @@ function writeAutoSave() {
     removeAutoSaveData(list.pop().id);
   }
 
-  const payload = JSON.stringify({ schemaVersion: SCHEMA_VERSION, messages: state.messages });
+  const payload = JSON.stringify({
+    schemaVersion: SCHEMA_VERSION,
+    messages: state.messages,
+    images: state.images,
+    speakerSettings: state.speakerSettings,
+  });
 
   for (;;) {
     try {
@@ -370,7 +621,7 @@ function writeAutoSave() {
   }
 }
 
-function readAutoSaveMessages(id) {
+function readAutoSaveData(id) {
   let raw;
   try {
     raw = localStorage.getItem(AUTOSAVE_DATA_PREFIX + id);
@@ -388,7 +639,7 @@ function readAutoSaveMessages(id) {
   if (!data || typeof data !== "object" || !Array.isArray(data.messages) || data.messages.length === 0) {
     return null;
   }
-  return data.messages;
+  return data;
 }
 
 function discardAutoSave(id) {
@@ -404,15 +655,21 @@ function discardAutoSave(id) {
 
 function restoreFromAutoSave(id) {
   const entry = readAutoSaveIndex().find((e) => e.id === id);
-  const messages = entry ? readAutoSaveMessages(id) : null;
-  if (!entry || !messages) {
+  const data = entry ? readAutoSaveData(id) : null;
+  if (!entry || !data) {
     // 記録が壊れている・本体だけ消えている場合は一覧からも取り除く
     discardAutoSave(id);
     window.alert("この自動保存は読み込めませんでした。一覧から取り除きます。");
     return;
   }
 
-  state.messages = normalizeLoadedMessages(messages);
+  const images = normalizeImages(data.images);
+  const imageIdSet = new Set(images.map((img) => img.id));
+  const messages = normalizeLoadedMessages(data.messages, imageIdSet);
+
+  state.messages = messages;
+  state.images = images;
+  state.speakerSettings = normalizeSpeakerSettings(data.speakerSettings, messages);
   state.meta = {
     schemaVersion: SCHEMA_VERSION,
     savedAt: typeof entry.savedAt === "string" ? entry.savedAt : null,
@@ -472,6 +729,9 @@ const el = {
   fieldSpeakerName: document.getElementById("field-speaker-name"),
   fieldSpeakerColor: document.getElementById("field-speaker-color"),
   colorSwatches: document.getElementById("color-swatches"),
+  iconFieldBlock: document.getElementById("icon-field-block"),
+  iconPickerList: document.getElementById("icon-picker-list"),
+  fieldIconUpload: document.getElementById("field-icon-upload"),
   fieldText: document.getElementById("field-text"),
   fieldDice: document.getElementById("field-dice"),
   btnCancelMsg: document.getElementById("btn-cancel-msg"),
@@ -492,6 +752,11 @@ const el = {
   speakerColorOverlayBackdrop: document.getElementById("speaker-color-overlay-backdrop"),
   speakerColorList: document.getElementById("speaker-color-list"),
   btnCloseSpeakerColors: document.getElementById("btn-close-speaker-colors"),
+
+  imagePreviewOverlay: document.getElementById("image-preview-overlay"),
+  imagePreviewOverlayBackdrop: document.getElementById("image-preview-overlay-backdrop"),
+  imagePreviewImg: document.getElementById("image-preview-img"),
+  btnCloseImagePreview: document.getElementById("btn-close-image-preview"),
 
   btnDeleteEmpty: document.getElementById("btn-delete-empty"),
 
@@ -524,6 +789,12 @@ let loadYieldedNoMessages = false;
 // 別のログを読み込んだときは、前のファイルを壊さないよう必ずnullに戻すこと。
 let saveFileHandle = null;
 
+// 新形式は .roll-result のclass修飾（diceOutcome）から直接判定できる。
+// それが無い（旧形式・単純ロール等）場合のみ、本文末尾からの推測にフォールバックする。
+function getDiceOutcomeKey(msg) {
+  return msg.diceOutcome || classifyDiceOutcome(msg.text);
+}
+
 function messagePassesFilter(msg) {
   if (currentSpeakerFilter !== "all" && msg.speaker !== currentSpeakerFilter) return false;
 
@@ -531,9 +802,9 @@ function messagePassesFilter(msg) {
     case "dice":
       return msg.isDiceRoll;
     case "dice-success":
-      return msg.isDiceRoll && diceOutcomeGroup(classifyDiceOutcome(msg.text)) === "success";
+      return msg.isDiceRoll && diceOutcomeGroup(getDiceOutcomeKey(msg)) === "success";
     case "dice-failure":
-      return msg.isDiceRoll && diceOutcomeGroup(classifyDiceOutcome(msg.text)) === "failure";
+      return msg.isDiceRoll && diceOutcomeGroup(getDiceOutcomeKey(msg)) === "failure";
     case "talk":
       return !msg.isDiceRoll;
     default:
@@ -758,8 +1029,30 @@ function renderList() {
 function buildMessageCard(msg, index) {
   const card = document.createElement("div");
   card.className = "msg-card" + (msg.id === selectedMessageId ? " is-selected" : "");
-  card.style.borderLeftColor = msg.color;
   card.dataset.id = msg.id;
+  card.addEventListener("click", () => handleCardTap(msg.id));
+
+  // システムメッセージ（SAN変化通知等）は話者を持たないので専用の見た目にする
+  if (msg.isSystem) {
+    card.classList.add("msg-card--system");
+    card.style.borderLeftColor = "transparent";
+
+    const meta = document.createElement("div");
+    meta.className = "msg-card__meta";
+    meta.innerHTML =
+      `<span class="msg-card__index">#${index + 1}</span>` +
+      `<span class="msg-card__tab">${escapeHtml(msg.tab)}</span>`;
+    card.appendChild(meta);
+
+    const text = document.createElement("div");
+    text.className = "msg-card__system-text";
+    text.textContent = msg.text;
+    card.appendChild(text);
+
+    return card;
+  }
+
+  card.style.borderLeftColor = msg.color;
 
   const meta = document.createElement("div");
   meta.className = "msg-card__meta";
@@ -769,19 +1062,51 @@ function buildMessageCard(msg, index) {
     (msg.isDiceRoll ? `<span class="msg-card__dice-badge">🎲 ダイスロール</span>` : "");
   card.appendChild(meta);
 
-  const speaker = document.createElement("div");
-  speaker.className = "msg-card__speaker";
-  speaker.innerHTML =
-    `<span class="color-dot" style="background:${escapeHtml(normalizeColor(msg.color))}"></span>` +
-    `<span>${escapeHtml(msg.speaker)}</span>`;
-  card.appendChild(speaker);
+  if (getSpeakerDisplayType(msg.speaker) === "character") {
+    card.classList.add("msg-card--character");
 
-  const text = document.createElement("div");
-  text.className = "msg-card__text";
-  text.textContent = msg.text;
-  card.appendChild(text);
+    const bubbleWrap = document.createElement("div");
+    bubbleWrap.className = "msg-card__bubble-wrap";
 
-  card.addEventListener("click", () => handleCardTap(msg.id));
+    const icon = document.createElement("div");
+    const dataUrl = msg.iconId ? getImageDataUrl(msg.iconId) : null;
+    if (dataUrl) {
+      icon.className = "msg-card__icon";
+      icon.style.backgroundImage = `url("${dataUrl}")`;
+    } else {
+      icon.className = "msg-card__icon msg-card__icon--placeholder";
+      icon.style.background = normalizeColor(msg.color);
+    }
+    bubbleWrap.appendChild(icon);
+
+    const bubbleCol = document.createElement("div");
+    bubbleCol.className = "msg-card__bubble-col";
+
+    const name = document.createElement("div");
+    name.className = "msg-card__bubble-name";
+    name.textContent = msg.speaker;
+    bubbleCol.appendChild(name);
+
+    const bubble = document.createElement("div");
+    bubble.className = "msg-card__bubble";
+    bubble.textContent = msg.text;
+    bubbleCol.appendChild(bubble);
+
+    bubbleWrap.appendChild(bubbleCol);
+    card.appendChild(bubbleWrap);
+  } else {
+    const speaker = document.createElement("div");
+    speaker.className = "msg-card__speaker";
+    speaker.innerHTML =
+      `<span class="color-dot" style="background:${escapeHtml(normalizeColor(msg.color))}"></span>` +
+      `<span>${escapeHtml(msg.speaker)}</span>`;
+    card.appendChild(speaker);
+
+    const text = document.createElement("div");
+    text.className = "msg-card__text";
+    text.textContent = msg.text;
+    card.appendChild(text);
+  }
 
   return card;
 }
@@ -1010,7 +1335,7 @@ el.btnDeleteEmpty.addEventListener("click", deleteEmptyMessages);
  * 追加・編集フォーム（5.2 3, 4, 5）
  * ========================================================== */
 
-let formContext = { mode: "add", index: null, insertAt: null, selectedColor: null };
+let formContext = { mode: "add", index: null, insertAt: null, selectedColor: null, selectedIconId: null };
 
 function getKnownSpeakers() {
   const map = new Map(); // speaker -> { color, count }
@@ -1053,7 +1378,7 @@ function getUsedColors() {
 }
 
 function openMessageForm({ mode, index = null, insertAt = null }) {
-  formContext = { mode, index, insertAt, selectedColor: null };
+  formContext = { mode, index, insertAt, selectedColor: null, selectedIconId: null };
 
   el.msgFormTitle.textContent = mode === "edit" ? "発言を編集" : "発言を追加";
 
@@ -1082,6 +1407,7 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
     editingMsg = state.messages[index];
     el.fieldText.value = editingMsg.text;
     el.fieldDice.checked = editingMsg.isDiceRoll;
+    formContext.selectedIconId = editingMsg.iconId || null;
 
     if (knownTabs.includes(editingMsg.tab)) {
       el.fieldTabSelect.value = editingMsg.tab;
@@ -1125,6 +1451,8 @@ function openMessageForm({ mode, index = null, insertAt = null }) {
     }
   }
 
+  updateIconFieldVisibility();
+
   el.overlay.hidden = false;
 }
 
@@ -1134,6 +1462,45 @@ function setNewTabBlockVisible(visible) {
 
 function setNewSpeakerBlockVisible(visible) {
   el.newSpeakerBlock.hidden = !visible;
+}
+
+// 発言編集フォームで今選ばれている発言者名（新規登録中ならその入力値）を返す
+function getFormSpeakerValue() {
+  return el.fieldSpeakerSelect.value === "__new__"
+    ? el.fieldSpeakerName.value.trim()
+    : el.fieldSpeakerSelect.value;
+}
+
+// 選ばれている発言者が「キャラクター発言」の場合のみ、画像選択欄を表示する
+function updateIconFieldVisibility() {
+  const speaker = getFormSpeakerValue();
+  const show = !!speaker && getSpeakerDisplayType(speaker) === "character";
+  el.iconFieldBlock.hidden = !show;
+  if (show) renderIconPicker(speaker);
+}
+
+function renderIconPicker(speaker) {
+  const selectedIconId = formContext.selectedIconId;
+  const ids = getSpeakerImageIds(speaker);
+
+  el.iconPickerList.innerHTML =
+    `<button type="button" class="icon-picker__item${!selectedIconId ? " is-selected" : ""}" data-action="pick-icon" data-icon-id="">画像なし</button>` +
+    ids
+      .map((id) => {
+        const img = getImageById(id);
+        const bg = img ? escapeHtml(img.dataUrl) : "";
+        return `<button type="button" class="icon-picker__item icon-picker__item--image${
+          selectedIconId === id ? " is-selected" : ""
+        }" data-action="pick-icon" data-icon-id="${escapeHtml(id)}" style="background-image:url('${bg}')" aria-label="この画像を選ぶ"></button>`;
+      })
+      .join("");
+
+  el.iconPickerList.querySelectorAll('[data-action="pick-icon"]').forEach((btn) => {
+    btn.addEventListener("click", () => {
+      formContext.selectedIconId = btn.dataset.iconId || null;
+      renderIconPicker(speaker);
+    });
+  });
 }
 
 function selectColorSwatch(color) {
@@ -1153,6 +1520,27 @@ el.fieldTabSelect.addEventListener("change", () => {
 
 el.fieldSpeakerSelect.addEventListener("change", () => {
   setNewSpeakerBlockVisible(el.fieldSpeakerSelect.value === "__new__");
+  formContext.selectedIconId = null;
+  updateIconFieldVisibility();
+});
+
+el.fieldSpeakerName.addEventListener("input", () => {
+  formContext.selectedIconId = null;
+  updateIconFieldVisibility();
+});
+
+el.fieldIconUpload.addEventListener("change", async () => {
+  const file = el.fieldIconUpload.files[0];
+  if (!file) return;
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    formContext.selectedIconId = addImageToPool(dataUrl);
+    renderIconPicker(getFormSpeakerValue());
+  } catch (e) {
+    window.alert("画像の読み込みに失敗しました。");
+    console.error(e);
+  }
+  el.fieldIconUpload.value = "";
 });
 
 el.colorSwatches.addEventListener("click", (e) => {
@@ -1212,6 +1600,7 @@ el.msgForm.addEventListener("submit", (e) => {
   }
 
   const isDiceRoll = el.fieldDice.checked;
+  const iconId = getSpeakerDisplayType(speaker) === "character" ? formContext.selectedIconId || null : null;
 
   if (formContext.mode === "edit") {
     const msg = state.messages[formContext.index];
@@ -1220,14 +1609,21 @@ el.msgForm.addEventListener("submit", (e) => {
     msg.color = normalizeColor(color);
     msg.text = text;
     msg.isDiceRoll = isDiceRoll;
+    msg.iconId = iconId;
+    // 手動編集した時点で自動生成のシステム通知としての特別扱いは外す
+    msg.isSystem = false;
   } else {
     const newMsg = {
       id: uid(),
       tab,
+      channel: null,
+      isSystem: false,
       speaker,
       color: normalizeColor(color),
       text,
       isDiceRoll,
+      diceOutcome: null,
+      iconId,
     };
     const insertAt = formContext.insertAt == null ? state.messages.length : formContext.insertAt;
     state.messages.splice(insertAt, 0, newMsg);
@@ -1250,6 +1646,39 @@ function recolorSpeaker(speaker, newColor) {
   renderSpeakerColorList();
 }
 
+// 発言者管理パネル：表情差分画像1件分のサムネイル＋差し替えボタンのHTML
+function buildSpeakerImageItemHtml(imageId) {
+  const img = getImageById(imageId);
+  const bg = img ? escapeHtml(img.dataUrl) : "";
+  return `
+    <div class="speaker-image-item">
+      <button type="button" class="speaker-image-thumb" style="background-image:url('${bg}')" data-action="view-image" data-image-id="${escapeHtml(imageId)}" aria-label="拡大表示"></button>
+      <button type="button" class="btn btn--secondary btn--small" data-action="replace-image" data-image-id="${escapeHtml(imageId)}">差し替える</button>
+      <input type="file" accept="image/*" hidden />
+    </div>
+  `;
+}
+
+async function replaceImageFromFile(imageId, file) {
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    const img = getImageById(imageId);
+    if (img) img.dataUrl = dataUrl;
+    renderAll();
+    renderSpeakerColorList();
+  } catch (e) {
+    window.alert("画像の読み込みに失敗しました。");
+    console.error(e);
+  }
+}
+
+function openImagePreview(imageId) {
+  const img = getImageById(imageId);
+  if (!img) return;
+  el.imagePreviewImg.src = img.dataUrl;
+  el.imagePreviewOverlay.hidden = false;
+}
+
 function renderSpeakerColorList() {
   const speakers = getKnownSpeakers();
   const palette = Array.from(new Set([...COLOR_PRESETS, ...getUsedColors()]));
@@ -1262,6 +1691,9 @@ function renderSpeakerColorList() {
   }
 
   speakers.forEach(({ speaker, color }) => {
+    const displayType = getSpeakerDisplayType(speaker);
+    const imageIds = getSpeakerImageIds(speaker);
+
     const row = document.createElement("div");
     row.className = "speaker-color-row";
     row.innerHTML = `
@@ -1279,6 +1711,26 @@ function renderSpeakerColorList() {
           <button type="button" class="btn btn--primary btn--small" data-action="apply-hex">適用</button>
         </div>
       </div>
+
+      <div class="speaker-type-toggle" role="group" aria-label="表示方法">
+        <button type="button" class="speaker-type-btn${displayType === "character" ? " is-active" : ""}" data-action="set-type" data-type="character">🗨️ キャラクター発言</button>
+        <button type="button" class="speaker-type-btn${displayType === "narration" ? " is-active" : ""}" data-action="set-type" data-type="narration">地の文</button>
+      </div>
+
+      ${
+        displayType === "character"
+          ? `<div class="speaker-image-gallery">
+              <p class="speaker-image-gallery__note">表情差分（元画像は小さいため拡大表示はぼやけます。タップで拡大、「差し替える」で別の画像に変更できます）</p>
+              <div class="speaker-image-list">
+                ${
+                  imageIds.length > 0
+                    ? imageIds.map(buildSpeakerImageItemHtml).join("")
+                    : `<p class="speaker-image-gallery__empty">まだ画像がありません。発言の編集画面から追加できます。</p>`
+                }
+              </div>
+            </div>`
+          : ""
+      }
     `;
 
     const editor = row.querySelector(".speaker-color-row__editor");
@@ -1301,6 +1753,27 @@ function renderSpeakerColorList() {
       recolorSpeaker(speaker, v);
     });
 
+    row.querySelectorAll('[data-action="set-type"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setSpeakerDisplayType(speaker, btn.dataset.type);
+        renderSpeakerColorList();
+      });
+    });
+
+    row.querySelectorAll('[data-action="view-image"]').forEach((btn) => {
+      btn.addEventListener("click", () => openImagePreview(btn.dataset.imageId));
+    });
+
+    row.querySelectorAll('[data-action="replace-image"]').forEach((btn) => {
+      const fileInput = btn.parentElement.querySelector('input[type="file"]');
+      btn.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files[0];
+        if (file) replaceImageFromFile(btn.dataset.imageId, file);
+        fileInput.value = "";
+      });
+    });
+
     el.speakerColorList.appendChild(row);
   });
 }
@@ -1314,6 +1787,13 @@ el.btnCloseSpeakerColors.addEventListener("click", () => {
 });
 el.speakerColorOverlayBackdrop.addEventListener("click", () => {
   el.speakerColorOverlay.hidden = true;
+});
+
+el.btnCloseImagePreview.addEventListener("click", () => {
+  el.imagePreviewOverlay.hidden = true;
+});
+el.imagePreviewOverlayBackdrop.addEventListener("click", () => {
+  el.imagePreviewOverlay.hidden = true;
 });
 
 /* ============================================================
@@ -1357,11 +1837,17 @@ function buildHybridHtml() {
     messages: state.messages.map((m) => ({
       id: m.id,
       tab: m.tab,
+      channel: m.channel,
+      isSystem: m.isSystem,
       speaker: m.speaker,
       color: m.color,
       text: m.text,
       isDiceRoll: m.isDiceRoll,
+      diceOutcome: m.diceOutcome,
+      iconId: m.iconId,
     })),
+    images: state.images,
+    speakerSettings: state.speakerSettings,
   };
 
   // JSON内に "</script>" が出現してもスクリプトタグが壊れないようにエスケープする
@@ -1617,6 +2103,56 @@ const PREVIEW_HTML_STYLE = `
     background: rgba(0, 0, 0, 0.035);
     color: #4a4a4a;
   }
+  .ccpv-system {
+    text-align: center;
+    color: #999;
+    font-size: 0.85em;
+  }
+  .ccpv-bubble-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 0 0.9em;
+  }
+  .ccpv-bubble-row.ccpv-tab-other {
+    opacity: 0.6;
+  }
+  .ccpv-bubble-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    flex: none;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+  }
+  .ccpv-bubble-col {
+    min-width: 0;
+  }
+  .ccpv-bubble-name {
+    font-weight: 700;
+    font-size: 0.85em;
+    color: #555;
+    margin-bottom: 2px;
+  }
+  .ccpv-bubble {
+    position: relative;
+    display: inline-block;
+    background: rgba(0, 0, 0, 0.045);
+    border-radius: 14px;
+    padding: 0.5em 0.9em;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+  .ccpv-bubble::before {
+    content: "";
+    position: absolute;
+    left: -6px;
+    top: 12px;
+    border-width: 6px 8px 6px 0;
+    border-style: solid;
+    border-color: transparent rgba(0, 0, 0, 0.045) transparent transparent;
+  }
   @media (prefers-color-scheme: dark) {
     body { background: #16181d; color: #e7e9ee; }
     .ccpv-speaker { color: #c7cbd4; }
@@ -1631,6 +2167,10 @@ const PREVIEW_HTML_STYLE = `
       background: rgba(255, 255, 255, 0.04);
       color: #c7cbd4;
     }
+    .ccpv-system { color: #6b7078; }
+    .ccpv-bubble-name { color: #c7cbd4; }
+    .ccpv-bubble { background: rgba(255, 255, 255, 0.08); }
+    .ccpv-bubble::before { border-color: transparent rgba(255, 255, 255, 0.08) transparent transparent; }
   }
 `;
 
@@ -1639,6 +2179,7 @@ const PREVIEW_HTML_STYLE = `
 // normalize("NFKC")で全角英字（日本語入力中に打った "info" など）も半角と同じ扱いにする。
 // ココフォリアの書き出しHTMLは既定のタブ名が "[main]" "[info]" "[other]" のように
 // 角括弧付きなので、丸ごと囲われている場合は括弧を外してから判定する。
+// タブ名の文字列から推測する（旧形式・チャンネルIDを持たないデータ向けのフォールバック）
 function getTabCategory(tab) {
   let t = tab.trim().normalize("NFKC").toLowerCase();
   const bracketed = t.match(/^\[(.+)\]$/);
@@ -1648,12 +2189,28 @@ function getTabCategory(tab) {
   return "main";
 }
 
+// 新形式は <article data-channel="..."> の安定IDで判定する（表示名は
+// 「[メイン]」「[情報]」のように日本語化されており、文字列からの推測はできないため）。
+// channel情報がない（旧形式・古い保存データ）場合のみ、タブ表示名から推測する。
+function getMessageTabCategory(msg) {
+  if (msg.channel === "info") return "info";
+  if (msg.channel === "other") return "other";
+  if (msg.channel) return "main";
+  return getTabCategory(msg.tab);
+}
+
 // 1メッセージ分のHTML。
 // KP/PL扱いにする発言者は、サイドバーの「KP/PL表示を設定」で選んだ発言者名（state.previewRoles）で判定する。
 // サイコロ発言(isDiceRoll)も特別扱いせず、他の発言と同じ見た目にする（ト書き調の統一感を優先）。
+// 発言者管理で「キャラクター発言」に設定された発言者は、ツール内の一覧と同じく
+// アイコン＋吹き出しの見た目にする。
 function buildPreviewLineHtml(msg) {
-  const category = getTabCategory(msg.tab);
+  const category = getMessageTabCategory(msg);
   const textHtml = escapeHtml(msg.text).replace(/\n/g, "<br>");
+
+  if (msg.isSystem) {
+    return `<p class="ccpv-line ccpv-system">${textHtml}</p>`;
+  }
 
   // infoタブ：話者名を出さず、引用ブロックのようにインデントを下げて表示する
   if (category === "info") {
@@ -1663,6 +2220,21 @@ function buildPreviewLineHtml(msg) {
   const trimmedSpeaker = msg.speaker.trim();
   const isKp = state.previewRoles.kp.includes(trimmedSpeaker);
   const isPl = state.previewRoles.pl.includes(trimmedSpeaker);
+
+  if (getSpeakerDisplayType(msg.speaker) === "character") {
+    const dataUrl = msg.iconId ? getImageDataUrl(msg.iconId) : null;
+    const avatarStyle = dataUrl
+      ? `background-image:url('${escapeHtml(dataUrl)}');`
+      : `background:${escapeHtml(normalizeColor(msg.color))};`;
+    const rowClasses = ["ccpv-bubble-row", `ccpv-tab-${category}`];
+    return `<div class="${rowClasses.join(" ")}">
+      <div class="ccpv-bubble-avatar" style="${avatarStyle}"></div>
+      <div class="ccpv-bubble-col">
+        <div class="ccpv-bubble-name">${escapeHtml(msg.speaker)}</div>
+        <div class="ccpv-bubble">${textHtml}</div>
+      </div>
+    </div>`;
+  }
 
   const classes = ["ccpv-line", `ccpv-tab-${category}`];
   if (isKp) classes.push("ccpv-role-kp");

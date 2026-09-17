@@ -332,6 +332,59 @@ main {
   font-size: 0.96rem;
 }
 
+.msg-card__system-text {
+  color: var(--color-text-sub);
+  font-size: 0.88rem;
+  text-align: center;
+  padding: 4px 0;
+}
+
+/* キャラクター発言（アイコン＋吹き出し）表示 */
+.msg-card__bubble-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.msg-card__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  flex: none;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+.msg-card__bubble-col {
+  min-width: 0;
+  flex: 1;
+}
+.msg-card__bubble-name {
+  font-weight: 700;
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+  color: var(--color-text-sub);
+}
+.msg-card__bubble {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  background: #eef0f3;
+  border-radius: 14px;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.96rem;
+}
+.msg-card__bubble::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 12px;
+  border-width: 6px 8px 6px 0;
+  border-style: solid;
+  border-color: transparent #eef0f3 transparent transparent;
+}
+
 .action-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -519,6 +572,102 @@ main {
   color: var(--color-text);
 }
 
+/* 発言者管理：キャラクター発言／地の文の切り替え */
+.speaker-type-toggle {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.speaker-type-btn {
+  flex: 1;
+  padding: 8px 6px;
+  font-size: 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.speaker-type-btn.is-active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* 発言者管理：表情差分画像のギャラリー */
+.speaker-image-gallery {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+}
+.speaker-image-gallery__note {
+  font-size: 0.78rem;
+  color: var(--color-text-sub);
+  margin: 0 0 8px;
+}
+.speaker-image-gallery__empty {
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+  margin: 0;
+}
+.speaker-image-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.speaker-image-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.speaker-image-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  background-size: cover;
+  background-position: center;
+  background-color: #eef0f3;
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  padding: 0;
+}
+
+/* 表情差分画像の拡大プレビュー */
+.overlay__sheet--image {
+  text-align: center;
+}
+.image-preview__img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+/* 発言編集フォームのアイコン選択 */
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.icon-picker__item {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  border: 2px solid var(--color-border);
+  background-color: #eef0f3;
+  background-size: cover;
+  background-position: center;
+  font-size: 0.6rem;
+  color: var(--color-text-sub);
+  cursor: pointer;
+  padding: 2px;
+}
+.icon-picker__item.is-selected {
+  border-color: var(--color-primary);
+}
+
 .preview-role-list {
   display: flex;
   flex-direction: column;
@@ -560,6 +709,10 @@ main {
   .field input[type="text"], .field select, .field textarea { background: #1a1c22; color: var(--color-text); }
   .overlay__sheet { background: #1f2229; }
   .bottom-bar__icon-btn { background: #2a2d35; border-color: var(--color-border); }
+  .msg-card__bubble { background: #2a2d35; }
+  .msg-card__bubble::before { border-color: transparent #2a2d35 transparent transparent; }
+  .speaker-type-btn { background: #1a1c22; }
+  .speaker-image-thumb, .icon-picker__item { background-color: #2a2d35; }
 }
 
 /* PC・iPad横向き：サイドバーを常時表示する2カラムレイアウト */
