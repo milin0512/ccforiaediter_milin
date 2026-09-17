@@ -1131,6 +1131,7 @@ function buildMessageCard(msg, index) {
       icon.className = "msg-card__icon msg-card__icon--placeholder";
       icon.style.background = normalizeColor(msg.color);
     }
+    icon.style.borderColor = normalizeColor(msg.color);
     bubbleWrap.appendChild(icon);
 
     const bubbleCol = document.createElement("div");
@@ -2243,7 +2244,7 @@ const PREVIEW_HTML_STYLE = `
     background-size: cover;
     background-position: center;
     flex: none;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    border: 3px solid rgba(0, 0, 0, 0.15);
   }
   .ccpv-bubble-col {
     min-width: 0;
@@ -2342,9 +2343,11 @@ function buildPreviewLineHtml(msg) {
 
   if (!msg.isDiceRoll && getSpeakerDisplayType(msg.speaker) === "character") {
     const dataUrl = msg.iconId ? getImageDataUrl(msg.iconId) : null;
-    const avatarStyle = dataUrl
-      ? `background-image:url('${escapeHtml(dataUrl)}');`
-      : `background:${escapeHtml(normalizeColor(msg.color))};`;
+    const avatarStyle =
+      (dataUrl
+        ? `background-image:url('${escapeHtml(dataUrl)}');`
+        : `background:${escapeHtml(normalizeColor(msg.color))};`) +
+      `border-color:${escapeHtml(normalizeColor(msg.color))};`;
     const rowClasses = ["ccpv-bubble-row", `ccpv-tab-${category}`];
     return `<div class="${rowClasses.join(" ")}">
       <div class="ccpv-bubble-avatar" style="${avatarStyle}"></div>
