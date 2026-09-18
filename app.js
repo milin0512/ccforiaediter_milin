@@ -305,14 +305,19 @@ function parseCcfoliaHtmlNew(doc, articles) {
     const color = normalizeColor(colorMatch ? colorMatch[1] : DEFAULT_COLOR);
 
     const textEl = article.querySelector(".message-text");
-    const text = textEl ? extractSpanText(textEl) : "";
+    const commandText = textEl ? extractSpanText(textEl) : "";
 
     const rollEl = article.querySelector(".roll-result");
     const isDiceRoll = !!rollEl;
     let diceOutcome = null;
+    let text = commandText;
     if (rollEl) {
       const outcomeClass = Array.from(rollEl.classList).find((c) => c !== "roll-result");
-      diceOutcome = outcomeClass || classifyDiceOutcomeFromText(extractSpanText(rollEl));
+      const rollText = extractSpanText(rollEl);
+      diceOutcome = outcomeClass || classifyDiceOutcomeFromText(rollText);
+      // ロール結果（(1D100<=58) ボーナス・ペナルティダイス[0] ＞ 24 ＞ ハード成功 等）は
+      // .message-text とは別要素のため、判定用コマンド文と結合して1つの本文にする
+      text = [commandText, rollText].filter(Boolean).join("\n");
     }
 
     let iconId = null;
@@ -2238,8 +2243,8 @@ const PREVIEW_HTML_STYLE = `
     opacity: 0.6;
   }
   .ccpv-bubble-avatar {
-    width: 44px;
-    height: 44px;
+    width: 64px;
+    height: 64px;
     border-radius: 50%;
     background-size: cover;
     background-position: center;
