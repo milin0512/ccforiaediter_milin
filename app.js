@@ -964,7 +964,24 @@ function renderLoadSection() {
   }
 }
 
-el.btnLoadExpand.addEventListener("click", () => el.fileInput.click());
+// 編集中のログを別のログに入れ替える前の確認（シナリオ整形ツールの「別のファイルに入れ替える」と同様）。
+// 直前の編集がまだ自動保存待ちだと入れ替え後のログで上書きされて失われるため、先に書き込んでおく。
+function confirmSwitchLog() {
+  if (state.messages.length === 0) return true;
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    writeAutoSave();
+  }
+  const note = autoSaveDisabled
+    ? "（このブラウザでは自動保存が使えないため、一時保存していない編集内容は失われます）"
+    : "（現在の編集内容は自動保存されており、あとからメニューの一覧で再開できます）";
+  return window.confirm(`現在のログ「${state.loadedFileName}」を閉じて、別のログに入れ替えます。よろしいですか？\n${note}`);
+}
+
+el.btnLoadExpand.addEventListener("click", () => {
+  if (!confirmSwitchLog()) return;
+  el.fileInput.click();
+});
 
 /* ============================================================
  * 一覧の描画（5.2章）
@@ -1050,7 +1067,10 @@ function buildRestoreItem(entry) {
   restoreBtn.type = "button";
   restoreBtn.className = "btn btn--primary btn--small";
   restoreBtn.textContent = "再開";
-  restoreBtn.addEventListener("click", () => restoreFromAutoSave(entry.id));
+  restoreBtn.addEventListener("click", () => {
+    if (!confirmSwitchLog()) return;
+    restoreFromAutoSave(entry.id);
+  });
   actions.appendChild(restoreBtn);
 
   const discardBtn = document.createElement("button");
