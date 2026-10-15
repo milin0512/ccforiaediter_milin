@@ -1773,6 +1773,56 @@ function recolorSpeaker(speaker, newColor) {
   renderSpeakerColorList();
 }
 
+// 発言者名の一括変更。その発言者の発言・表情差分画像・表示方法・KP/PL設定をすべて新しい名前に移す。
+// 新しい名前が既存の発言者と同じなら、確認のうえ統合する（色・表示方法は統合先に合わせ、画像は両方を残す）。
+function renameSpeaker(oldName, newNameRaw) {
+  const newName = newNameRaw.trim();
+  if (!newName) {
+    window.alert("新しい名前を入力してください。");
+    return false;
+  }
+  if (newName === oldName) return false;
+
+  const target = getKnownSpeakers().find((s) => s.speaker === newName);
+  if (target) {
+    const ok = window.confirm(
+      `「${newName}」は既にいる発言者です。\n「${oldName}」の発言をすべて「${newName}」にまとめますか？\n\n` +
+        `色と表示方法は「${newName}」のものに合わせ、表情差分画像は両方とも残します。`
+    );
+    if (!ok) return false;
+  }
+
+  const targetColor = target ? normalizeColor(target.color) : null;
+  state.messages.forEach((m) => {
+    if (m.speaker !== oldName) return;
+    m.speaker = newName;
+    if (targetColor) m.color = targetColor;
+  });
+  state.images.forEach((img) => {
+    if (img.speaker === oldName) img.speaker = newName;
+  });
+
+  if (!target && state.speakerSettings[oldName]) {
+    state.speakerSettings[newName] = state.speakerSettings[oldName];
+  }
+  delete state.speakerSettings[oldName];
+
+  // KP/PL設定は新しい名前にも引き継ぐ。KP/PL設定はファイルをまたいで使い回すため、
+  // 古い名前も残しておく（次に読み込むログでは古い名前のままのことがある）。
+  // 判定は前後の空白を除いた名前で行っているので、それに合わせる。
+  const oldTrimmed = oldName.trim();
+  ["kp", "pl"].forEach((role) => {
+    const list = state.previewRoles[role];
+    if (list.includes(oldTrimmed) && !list.includes(newName)) list.push(newName);
+  });
+
+  if (currentSpeakerFilter === oldName) currentSpeakerFilter = newName;
+
+  renderAll();
+  renderSpeakerColorList();
+  return true;
+}
+
 // 発言者管理パネル：表情差分画像1件分のサムネイル＋差し替えボタンのHTML
 function buildSpeakerImageItemHtml(imageId) {
   const img = getImageById(imageId);
@@ -1864,9 +1914,17 @@ function renderSpeakerColorList() {
       <div class="speaker-color-row__main">
         <span class="color-dot" style="background:${escapeHtml(normalizeColor(color))}"></span>
         <span class="speaker-color-row__name">${escapeHtml(speaker)}</span>
+        <button type="button" class="btn btn--secondary btn--small" data-action="toggle-rename">名前を変更</button>
         <button type="button" class="btn btn--secondary btn--small" data-action="toggle">色を変更</button>
       </div>
-      <div class="speaker-color-row__editor" hidden>
+      <div class="speaker-color-row__editor" data-role="rename-editor" hidden>
+        <p class="speaker-image-gallery__note">この発言者のすべての発言の名前を変更します。既にいる発言者の名前にすると、その発言者にまとめられます。</p>
+        <div class="speaker-color-row__hex">
+          <input type="text" data-role="rename-input" value="${escapeHtml(speaker)}" aria-label="新しい名前" />
+          <button type="button" class="btn btn--primary btn--small" data-action="apply-rename">変更</button>
+        </div>
+      </div>
+      <div class="speaker-color-row__editor" data-role="color-editor" hidden>
         <div class="color-swatches">
           ${palette.map(buildColorSwatchHtml).join("")}
         </div>
@@ -1884,11 +1942,28 @@ function renderSpeakerColorList() {
       ${buildSpeakerImageSectionHtml(speaker, displayType, imageIds)}
     `;
 
-    const editor = row.querySelector(".speaker-color-row__editor");
-    const hexInput = row.querySelector(".speaker-color-row__hex input");
+    const editor = row.querySelector('[data-role="color-editor"]');
+    const hexInput = editor.querySelector(".speaker-color-row__hex input");
+    const renameEditor = row.querySelector('[data-role="rename-editor"]');
+    const renameInput = row.querySelector('[data-role="rename-input"]');
 
     row.querySelector('[data-action="toggle"]').addEventListener("click", () => {
       editor.hidden = !editor.hidden;
+    });
+
+    row.querySelector('[data-action="toggle-rename"]').addEventListener("click", () => {
+      renameEditor.hidden = !renameEditor.hidden;
+      if (!renameEditor.hidden) renameInput.focus();
+    });
+
+    const applyRename = () => renameSpeaker(speaker, renameInput.value);
+    row.querySelector('[data-action="apply-rename"]').addEventListener("click", applyRename);
+    renameInput.addEventListener("keydown", (e) => {
+      // 日本語入力の変換確定のEnterでは実行しない
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        applyRename();
+      }
     });
 
     row.querySelectorAll(".color-swatch").forEach((sw) => {
