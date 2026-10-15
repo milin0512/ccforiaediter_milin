@@ -333,6 +333,37 @@ a.btn { text-decoration: none; }
   font-size: 0.96rem;
 }
 
+/* システムメッセージは発言者の色を持たないので、左辺も他の辺と同じ細い枠線にする */
+.msg-card--system {
+  border-left-width: 1px;
+}
+
+/* ダイスロールの判定結果。成功度合い（クリティカル＞イクストリーム成功＞ハード成功＞
+ * 成功＞失敗＞ファンブル）に応じて、極端な結果ほど強く目立たせる */
+.dice-outcome { font-weight: 700; }
+.dice-outcome--critical,
+.dice-outcome--fumble {
+  display: inline-block;
+  padding: 0 0.5em;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 1.12em;
+  line-height: 1.5;
+}
+.dice-outcome--critical { background: #d97706; }
+.dice-outcome--fumble { background: #b91c1c; }
+.dice-outcome--extreme {
+  padding: 0 0.4em;
+  border-radius: 4px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 1.06em;
+}
+.dice-outcome--hard { color: #1d4ed8; }
+.dice-outcome--regular,
+.dice-outcome--success { color: #2563eb; font-weight: 400; }
+.dice-outcome--failure { color: #b4534b; font-weight: 400; }
+
 .msg-card__system-text {
   color: var(--color-text-sub);
   font-size: 0.88rem;
@@ -732,6 +763,11 @@ a.btn { text-decoration: none; }
   .overlay__sheet { background: #1f2229; }
   .bottom-bar__icon-btn { background: #2a2d35; border-color: var(--color-border); }
   .msg-card__bubble { background: #2a2d35; }
+  .dice-outcome--extreme { background: rgba(96, 165, 250, 0.2); color: #93c5fd; }
+  .dice-outcome--hard,
+  .dice-outcome--regular,
+  .dice-outcome--success { color: #93c5fd; }
+  .dice-outcome--failure { color: #f0a29b; }
   .msg-card__bubble::before { border-color: transparent #2a2d35 transparent transparent; }
   .speaker-type-btn { background: #1a1c22; }
   .speaker-image-thumb, .icon-picker__item { background-color: #2a2d35; }

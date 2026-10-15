@@ -26,17 +26,41 @@ const DICE_OUTCOME_CATEGORIES = [
   { key: "regular", label: "レギュラー成功", group: "success" },
   { key: "success", label: "成功", group: "success" },
   { key: "failure", label: "失敗", group: "failure" },
-  { key: "fumble", label: "ファンブル", group: "failure" },
+  { key: "fumble", label: "ファンブル", aliases: ["致命的失敗"], group: "failure" },
 ];
+
+function findDiceOutcomeCategoryByWord(word) {
+  return DICE_OUTCOME_CATEGORIES.find((c) => c.label === word || (c.aliases || []).includes(word)) || null;
+}
 
 function classifyDiceOutcome(text) {
   const parts = text.split("＞");
   if (parts.length < 2) return "other";
   const last = parts[parts.length - 1].trim();
-  const known = DICE_OUTCOME_CATEGORIES.find((c) => c.label === last);
+  const known = findDiceOutcomeCategoryByWord(last);
   if (known) return known.key;
   if (/^-?\d+(\[[^\]]*\])?$/.test(last)) return "number";
   return "other";
+}
+
+// 判定結果の語句（本文末尾の最後の＞より後ろ）を色付きで強調するための分割。
+// 新形式の .roll-result のclass修飾は「success」にハード成功・イクストリーム成功も含まれ
+// 段階が区別できないため、強調の段階は本文の語句から判定する。
+// 判定語句で終わっていない本文（手動で書き換えた等）は null を返し、強調しない。
+function splitDiceOutcomeText(text) {
+  const idx = text.lastIndexOf("＞");
+  if (idx === -1) return null;
+  const tail = text.slice(idx + 1);
+  const word = tail.trim();
+  const category = findDiceOutcomeCategoryByWord(word);
+  if (!category) return null;
+  const wordStart = idx + 1 + tail.indexOf(word);
+  return {
+    before: text.slice(0, wordStart),
+    word,
+    after: text.slice(wordStart + word.length),
+    key: category.key,
+  };
 }
 
 function diceOutcomeGroup(key) {
@@ -1091,7 +1115,6 @@ function buildMessageCard(msg, index) {
   // システムメッセージ（SAN変化通知等）は話者を持たないので専用の見た目にする
   if (msg.isSystem) {
     card.classList.add("msg-card--system");
-    card.style.borderLeftColor = "transparent";
 
     const meta = document.createElement("div");
     meta.className = "msg-card__meta";
@@ -1164,7 +1187,15 @@ function buildMessageCard(msg, index) {
 
     const text = document.createElement("div");
     text.className = "msg-card__text";
-    text.textContent = msg.text;
+    const outcome = msg.isDiceRoll ? splitDiceOutcomeText(msg.text) : null;
+    if (outcome) {
+      const word = document.createElement("span");
+      word.className = `dice-outcome dice-outcome--${outcome.key}`;
+      word.textContent = outcome.word;
+      text.append(outcome.before, word, outcome.after);
+    } else {
+      text.textContent = msg.text;
+    }
     card.appendChild(text);
   }
 
@@ -2233,6 +2264,29 @@ const PREVIEW_HTML_STYLE = `
     color: #999;
     font-size: 0.85em;
   }
+  .ccpv-dice { font-weight: 700; }
+  .ccpv-dice-critical,
+  .ccpv-dice-fumble {
+    display: inline-block;
+    padding: 0 0.5em;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 1.12em;
+    line-height: 1.5;
+  }
+  .ccpv-dice-critical { background: #d97706; }
+  .ccpv-dice-fumble { background: #b91c1c; }
+  .ccpv-dice-extreme {
+    padding: 0 0.4em;
+    border-radius: 4px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-size: 1.06em;
+  }
+  .ccpv-dice-hard { color: #1d4ed8; }
+  .ccpv-dice-regular,
+  .ccpv-dice-success { color: #2563eb; font-weight: 400; }
+  .ccpv-dice-failure { color: #b4534b; font-weight: 400; }
   .ccpv-bubble-row {
     display: flex;
     align-items: flex-start;
@@ -2294,6 +2348,11 @@ const PREVIEW_HTML_STYLE = `
     }
     .ccpv-system { color: #6b7078; }
     .ccpv-bubble-name { color: #c7cbd4; }
+    .ccpv-dice-extreme { background: rgba(96, 165, 250, 0.2); color: #93c5fd; }
+    .ccpv-dice-hard,
+    .ccpv-dice-regular,
+    .ccpv-dice-success { color: #93c5fd; }
+    .ccpv-dice-failure { color: #f0a29b; }
     .ccpv-bubble { background: rgba(255, 255, 255, 0.08); }
     .ccpv-bubble::before { border-color: transparent rgba(255, 255, 255, 0.08) transparent transparent; }
   }
@@ -2331,7 +2390,14 @@ function getMessageTabCategory(msg) {
 // アイコン＋吹き出しの見た目にする。
 function buildPreviewLineHtml(msg) {
   const category = getMessageTabCategory(msg);
-  const textHtml = escapeHtml(msg.text).replace(/\n/g, "<br>");
+  const outcome = msg.isDiceRoll ? splitDiceOutcomeText(msg.text) : null;
+  const textHtml = (
+    outcome
+      ? escapeHtml(outcome.before) +
+        `<span class="ccpv-dice ccpv-dice-${outcome.key}">${escapeHtml(outcome.word)}</span>` +
+        escapeHtml(outcome.after)
+      : escapeHtml(msg.text)
+  ).replace(/\n/g, "<br>");
 
   if (msg.isSystem) {
     return `<p class="ccpv-line ccpv-system">${textHtml}</p>`;
