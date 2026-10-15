@@ -585,11 +585,12 @@ function loadFromHtmlString(htmlString, fileName) {
 
   selectedMessageId = null;
   bottomBarMinimized = false;
-  loadSectionExpanded = false;
   loadYieldedNoMessages = state.messages.length === 0;
   // 別のログを読み込んだら、前のファイルを上書きしないよう保存先を忘れる
   saveFileHandle = null;
 
+  // メニューから読み込んだ場合に、メニューが一覧に重なったままにならないよう閉じる
+  closeSidebar();
   renderAll();
 }
 
@@ -760,10 +761,10 @@ function restoreFromAutoSave(id) {
 
   selectedMessageId = null;
   bottomBarMinimized = false;
-  loadSectionExpanded = false;
   loadYieldedNoMessages = state.messages.length === 0;
   saveFileHandle = null;
 
+  closeSidebar();
   renderAll();
 }
 
@@ -787,6 +788,8 @@ const el = {
   saveTempStatus: document.getElementById("save-temp-status"),
   restoreNotice: document.getElementById("restore-notice"),
   restoreList: document.getElementById("restore-list"),
+  sidebarRestore: document.getElementById("sidebar-restore"),
+  sidebarRestoreList: document.getElementById("sidebar-restore-list"),
   exportFormatSelect: document.getElementById("export-format-select"),
   exportFormatNote: document.getElementById("export-format-note"),
   btnManagePreviewRoles: document.getElementById("btn-manage-preview-roles"),
@@ -859,7 +862,6 @@ const el = {
 
 let currentFilter = "all";
 let currentSpeakerFilter = "all";
-let loadSectionExpanded = true;
 let sidebarOpen = false;
 let selectedMessageId = null;
 let bottomBarMinimized = false;
@@ -943,18 +945,18 @@ el.btnSidebarClose.addEventListener("click", closeSidebar);
 el.sidebarBackdrop.addEventListener("click", closeSidebar);
 
 /* ============================================================
- * ①読み込みエリアの折りたたみ（読み込み後は自動で畳む）
+ * ①読み込みエリア（読み込み後はページ先頭から隠し、ハンバーガーメニューに移す）
  * ========================================================== */
 
 function renderLoadSection() {
   const hasFile = !!state.loadedFileName;
-  // 発言が0件のときは畳まない。畳むと「ファイルを選ぶ」が隠れて、
+  // 発言が0件のときは隠さない。隠すと「ファイルを選ぶ」が見えなくなり、
   // 別のファイルを選び直す手段が分かりにくくなるため。
   const hasMessages = state.messages.length > 0;
-  const showFull = !hasFile || !hasMessages || loadSectionExpanded;
-  el.loadFull.hidden = !showFull;
-  // 畳んだ状態ではページ先頭の読み込みパネルごと隠し、ファイル名と
-  // 「別のファイルを読み込む」はハンバーガーメニュー（サイドバー）側に出す
+  const showFull = !hasFile || !hasMessages;
+  // 読み込み後はページ先頭の読み込みパネルごと隠し、ファイル名・別ファイルの読み込み・
+  // 自動保存の履歴はハンバーガーメニュー（サイドバー）の「ファイル」欄から操作する
+  // （シナリオ整形ツールのメニュー最下部「ファイル」と同じく、ボタンから直接ファイル選択を開く）
   el.sectionLoad.hidden = !showFull;
   el.loadCollapsed.hidden = showFull;
   if (hasFile) {
@@ -962,14 +964,7 @@ function renderLoadSection() {
   }
 }
 
-el.btnLoadExpand.addEventListener("click", () => {
-  loadSectionExpanded = true;
-  renderLoadSection();
-  // パネルを開いたときにも、他のログの自動保存を選べるように一覧を作り直す
-  renderRestoreList();
-  closeSidebar();
-  el.sectionLoad.scrollIntoView({ behavior: "smooth", block: "start" });
-});
+el.btnLoadExpand.addEventListener("click", () => el.fileInput.click());
 
 /* ============================================================
  * 一覧の描画（5.2章）
@@ -1009,20 +1004,21 @@ function renderAll() {
 }
 
 function renderRestoreList() {
-  // 読み込みパネルが出ているときだけ案内する（読み込み直後の畳まれた状態では出さない）。
+  // 読み込み前はページ先頭の読み込みパネルに、読み込み後はハンバーガーメニューの
+  // 「ファイル」欄に出す（使われない側は親ごと隠れている）。
   // 編集中のログ自身は、いま画面に出ているものなので一覧から除く。
-  const showPanel = !el.loadFull.hidden;
   const currentKey = state.messages.length > 0 ? currentAutoSaveKey() : null;
-  const entries = showPanel ? readAutoSaveIndex().filter((e) => e.key !== currentKey) : [];
+  const entries = readAutoSaveIndex().filter((e) => e.key !== currentKey);
 
   el.restoreList.innerHTML = "";
-  if (entries.length === 0) {
-    el.restoreNotice.hidden = true;
-    return;
-  }
+  el.sidebarRestoreList.innerHTML = "";
+  el.restoreNotice.hidden = entries.length === 0;
+  el.sidebarRestore.hidden = entries.length === 0;
 
-  entries.forEach((entry) => el.restoreList.appendChild(buildRestoreItem(entry)));
-  el.restoreNotice.hidden = false;
+  entries.forEach((entry) => {
+    el.restoreList.appendChild(buildRestoreItem(entry));
+    el.sidebarRestoreList.appendChild(buildRestoreItem(entry));
+  });
 }
 
 function buildRestoreItem(entry) {
