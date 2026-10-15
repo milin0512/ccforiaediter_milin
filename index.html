@@ -7,7 +7,7 @@
 <title>ココフォリアログ編集ツール</title>
 <link rel="icon" href="L.png" />
 <link rel="apple-touch-icon" href="L.png" />
-<link rel="stylesheet" href="style.css?v=9" />
+<link rel="stylesheet" href="style.css?v=10" />
 </head>
 <body>
 
@@ -82,10 +82,6 @@
       <h3 class="sidebar__section-title">ファイル</h3>
       <p class="sidebar__section-desc" id="load-collapsed-text"></p>
       <button type="button" class="btn btn--secondary btn--block" id="btn-load-expand">別のファイルを読み込む</button>
-      <div class="sidebar-restore" id="sidebar-restore" hidden>
-        <p class="sidebar__section-desc">自動保存したほかのログ（最新5件まで）</p>
-        <ul class="restore-list" id="sidebar-restore-list"></ul>
-      </div>
     </div>
 
     <div class="sidebar__section">
@@ -109,6 +105,7 @@
         <label class="btn btn--primary btn--block" for="file-input">ファイルを選ぶ</label>
         <input type="file" id="file-input" accept=".html,text/html" hidden />
         <p class="load-status" id="load-status">まだファイルが読み込まれていません。</p>
+        <button type="button" class="btn btn--secondary btn--block load-cancel" id="btn-load-cancel" hidden>キャンセル（編集中のログに戻る）</button>
       </div>
     </section>
 
@@ -244,6 +241,6 @@
   </div>
 </div>
 
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

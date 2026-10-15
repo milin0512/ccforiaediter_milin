@@ -589,8 +589,8 @@ function loadFromHtmlString(htmlString, fileName) {
   // 別のログを読み込んだら、前のファイルを上書きしないよう保存先を忘れる
   saveFileHandle = null;
 
-  // メニューから読み込んだ場合に、メニューが一覧に重なったままにならないよう閉じる
-  closeSidebar();
+  // 「別のファイルを読み込む」の読み込み画面から選んだ場合は、編集画面に戻す
+  switchScreenOpen = false;
   renderAll();
 }
 
@@ -764,7 +764,7 @@ function restoreFromAutoSave(id) {
   loadYieldedNoMessages = state.messages.length === 0;
   saveFileHandle = null;
 
-  closeSidebar();
+  switchScreenOpen = false;
   renderAll();
 }
 
@@ -788,8 +788,7 @@ const el = {
   saveTempStatus: document.getElementById("save-temp-status"),
   restoreNotice: document.getElementById("restore-notice"),
   restoreList: document.getElementById("restore-list"),
-  sidebarRestore: document.getElementById("sidebar-restore"),
-  sidebarRestoreList: document.getElementById("sidebar-restore-list"),
+  btnLoadCancel: document.getElementById("btn-load-cancel"),
   exportFormatSelect: document.getElementById("export-format-select"),
   exportFormatNote: document.getElementById("export-format-note"),
   btnManagePreviewRoles: document.getElementById("btn-manage-preview-roles"),
@@ -863,6 +862,8 @@ const el = {
 let currentFilter = "all";
 let currentSpeakerFilter = "all";
 let sidebarOpen = false;
+// 「別のファイルを読み込む」で読み込み画面に戻っている間だけtrue
+let switchScreenOpen = false;
 let selectedMessageId = null;
 let bottomBarMinimized = false;
 // 「発言0件」が読み込み失敗によるものか、すべて削除した結果かを区別するための記録
@@ -953,35 +954,51 @@ function renderLoadSection() {
   // 発言が0件のときは隠さない。隠すと「ファイルを選ぶ」が見えなくなり、
   // 別のファイルを選び直す手段が分かりにくくなるため。
   const hasMessages = state.messages.length > 0;
-  const showFull = !hasFile || !hasMessages;
-  // 読み込み後はページ先頭の読み込みパネルごと隠し、ファイル名・別ファイルの読み込み・
-  // 自動保存の履歴はハンバーガーメニュー（サイドバー）の「ファイル」欄から操作する
-  // （シナリオ整形ツールのメニュー最下部「ファイル」と同じく、ボタンから直接ファイル選択を開く）
+  const showFull = !hasFile || !hasMessages || switchScreenOpen;
+  // 読み込み後はページ先頭の読み込みパネルごと隠し、ファイル名と「別のファイルを読み込む」は
+  // ハンバーガーメニュー（サイドバー）の「ファイル」欄に出す
   el.sectionLoad.hidden = !showFull;
   el.loadCollapsed.hidden = showFull;
+  el.btnLoadCancel.hidden = !(switchScreenOpen && hasMessages);
   if (hasFile) {
     el.loadCollapsedText.textContent = `${state.loadedFileName}（${state.messages.length} 件）読み込み中`;
   }
 }
 
-// 編集中のログを別のログに入れ替える前の確認（シナリオ整形ツールの「別のファイルに入れ替える」と同様）。
-// 直前の編集がまだ自動保存待ちだと入れ替え後のログで上書きされて失われるため、先に書き込んでおく。
-function confirmSwitchLog() {
-  if (state.messages.length === 0) return true;
-  if (autoSaveTimer) {
-    clearTimeout(autoSaveTimer);
-    writeAutoSave();
+// 「別のファイルを読み込む」（シナリオ整形ツールの「別のファイルに入れ替える」と同じ方式）:
+// いったん最初の読み込み画面に戻し、新しいファイルを選ぶか自動保存の一覧から再開できるようにする。
+// 入れ替える前に今のログを自動保存して一覧に残すため、確認ダイアログは出さない。
+// 自動保存できない環境（プライベートブラウズ等）のときだけ破棄の確認を出す。
+// 何も選ばずに戻りたいときは「キャンセル」で編集中のログに戻れる。
+let switchReturnScrollY = 0;
+
+function openSwitchScreen() {
+  closeSidebar();
+  // 直前の編集がまだ自動保存待ちだと履歴に残らないため、先に書き込んでおく
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  writeAutoSave();
+  if (autoSaveDisabled) {
+    const ok = window.confirm(
+      "この環境では自動保存が使えないため、現在の編集内容は一覧に残りません。破棄して別のファイルに入れ替えますか？\n" +
+        "（一時保存していない編集内容はすべて失われます）"
+    );
+    if (!ok) return;
   }
-  const note = autoSaveDisabled
-    ? "（このブラウザでは自動保存が使えないため、一時保存していない編集内容は失われます）"
-    : "（現在の編集内容は自動保存されており、あとからメニューの一覧で再開できます）";
-  return window.confirm(`現在のログ「${state.loadedFileName}」を閉じて、別のログに入れ替えます。よろしいですか？\n${note}`);
+  switchReturnScrollY = window.scrollY;
+  switchScreenOpen = true;
+  renderAll();
+  window.scrollTo(0, 0);
 }
 
-el.btnLoadExpand.addEventListener("click", () => {
-  if (!confirmSwitchLog()) return;
-  el.fileInput.click();
-});
+// 何も選ばずに、編集中のログへ戻る
+function closeSwitchScreen() {
+  switchScreenOpen = false;
+  renderAll();
+  window.scrollTo(0, switchReturnScrollY);
+}
+
+el.btnLoadExpand.addEventListener("click", openSwitchScreen);
+el.btnLoadCancel.addEventListener("click", closeSwitchScreen);
 
 /* ============================================================
  * 一覧の描画（5.2章）
@@ -989,12 +1006,18 @@ el.btnLoadExpand.addEventListener("click", () => {
 
 function renderAll() {
   const hasMessages = state.messages.length > 0;
-  el.sectionEditor.hidden = !hasMessages;
-  el.sidebar.hidden = !hasMessages;
-  el.btnSidebarOpen.hidden = !hasMessages;
-  if (!hasMessages) closeSidebar();
+  // 「別のファイルを読み込む」で読み込み画面に戻っている間は、編集画面とメニューを隠す
+  const showEditor = hasMessages && !switchScreenOpen;
+  el.sectionEditor.hidden = !showEditor;
+  el.sidebar.hidden = !showEditor;
+  el.btnSidebarOpen.hidden = !showEditor;
+  if (!showEditor) closeSidebar();
 
-  if (!state.loadedFileName) {
+  if (switchScreenOpen && hasMessages) {
+    el.loadStatus.textContent = autoSaveDisabled
+      ? `編集中のログ：${state.loadedFileName}`
+      : `編集中の「${state.loadedFileName}」は自動保存しました。あとから上の一覧の「再開」で開き直せます。`;
+  } else if (!state.loadedFileName) {
     el.loadStatus.textContent = "まだファイルが読み込まれていません。";
   } else if (hasMessages) {
     el.loadStatus.textContent =
@@ -1021,21 +1044,14 @@ function renderAll() {
 }
 
 function renderRestoreList() {
-  // 読み込み前はページ先頭の読み込みパネルに、読み込み後はハンバーガーメニューの
-  // 「ファイル」欄に出す（使われない側は親ごと隠れている）。
-  // 編集中のログ自身は、いま画面に出ているものなので一覧から除く。
+  // 編集中のログ自身は、入れ替え先の候補ではないので一覧から除く
+  // （戻りたいときは「キャンセル（編集中のログに戻る）」を使う）。
   const currentKey = state.messages.length > 0 ? currentAutoSaveKey() : null;
   const entries = readAutoSaveIndex().filter((e) => e.key !== currentKey);
 
   el.restoreList.innerHTML = "";
-  el.sidebarRestoreList.innerHTML = "";
   el.restoreNotice.hidden = entries.length === 0;
-  el.sidebarRestore.hidden = entries.length === 0;
-
-  entries.forEach((entry) => {
-    el.restoreList.appendChild(buildRestoreItem(entry));
-    el.sidebarRestoreList.appendChild(buildRestoreItem(entry));
-  });
+  entries.forEach((entry) => el.restoreList.appendChild(buildRestoreItem(entry)));
 }
 
 function buildRestoreItem(entry) {
@@ -1067,10 +1083,7 @@ function buildRestoreItem(entry) {
   restoreBtn.type = "button";
   restoreBtn.className = "btn btn--primary btn--small";
   restoreBtn.textContent = "再開";
-  restoreBtn.addEventListener("click", () => {
-    if (!confirmSwitchLog()) return;
-    restoreFromAutoSave(entry.id);
-  });
+  restoreBtn.addEventListener("click", () => restoreFromAutoSave(entry.id));
   actions.appendChild(restoreBtn);
 
   const discardBtn = document.createElement("button");
@@ -1293,7 +1306,7 @@ function getSelectedIndex() {
 }
 
 function renderBottomBar() {
-  if (!selectedMessageId) {
+  if (!selectedMessageId || switchScreenOpen) {
     el.bottomBar.hidden = true;
     document.body.style.paddingBottom = "";
     return;

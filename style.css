@@ -248,23 +248,8 @@ a.btn { text-decoration: none; }
 #load-collapsed-text {
   word-break: break-word;
 }
-.sidebar-restore {
-  margin-top: 14px;
-}
-.sidebar-restore[hidden] { display: none; }
-/* サイドバーは横幅が狭いので、ファイル名の下に「再開」「破棄」を並べる */
-.sidebar-restore .restore-item {
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--color-border);
-}
-.sidebar-restore .restore-item:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
-}
-.sidebar-restore .restore-item__info {
-  flex-basis: 100%;
+.load-cancel {
+  margin-top: 12px;
 }
 
 .editor-toolbar {
