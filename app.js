@@ -774,6 +774,7 @@ function restoreFromAutoSave(id) {
 const el = {
   fileInput: document.getElementById("file-input"),
   loadStatus: document.getElementById("load-status"),
+  sectionLoad: document.getElementById("section-load"),
   loadFull: document.getElementById("load-full"),
   loadCollapsed: document.getElementById("load-collapsed"),
   loadCollapsedText: document.getElementById("load-collapsed-text"),
@@ -952,6 +953,9 @@ function renderLoadSection() {
   const hasMessages = state.messages.length > 0;
   const showFull = !hasFile || !hasMessages || loadSectionExpanded;
   el.loadFull.hidden = !showFull;
+  // 畳んだ状態ではページ先頭の読み込みパネルごと隠し、ファイル名と
+  // 「別のファイルを読み込む」はハンバーガーメニュー（サイドバー）側に出す
+  el.sectionLoad.hidden = !showFull;
   el.loadCollapsed.hidden = showFull;
   if (hasFile) {
     el.loadCollapsedText.textContent = `${state.loadedFileName}（${state.messages.length} 件）読み込み中`;
@@ -963,6 +967,8 @@ el.btnLoadExpand.addEventListener("click", () => {
   renderLoadSection();
   // パネルを開いたときにも、他のログの自動保存を選べるように一覧を作り直す
   renderRestoreList();
+  closeSidebar();
+  el.sectionLoad.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 /* ============================================================

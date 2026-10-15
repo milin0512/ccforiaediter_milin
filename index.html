@@ -7,7 +7,7 @@
 <title>ココフォリアログ編集ツール</title>
 <link rel="icon" href="L.png" />
 <link rel="apple-touch-icon" href="L.png" />
-<link rel="stylesheet" href="style.css?v=7" />
+<link rel="stylesheet" href="style.css?v=8" />
 </head>
 <body>
 
@@ -78,6 +78,12 @@
       </label>
     </div>
 
+    <div class="sidebar__section" id="load-collapsed" hidden>
+      <h3 class="sidebar__section-title">ファイル</h3>
+      <p class="sidebar__section-desc" id="load-collapsed-text"></p>
+      <button type="button" class="btn btn--secondary btn--block" id="btn-load-expand">別のファイルを読み込む</button>
+    </div>
+
     <div class="sidebar__section">
       <a class="btn btn--secondary btn--block" href="manual.html" target="_blank" rel="noopener">📖 取扱説明書を開く</a>
     </div>
@@ -99,10 +105,6 @@
         <label class="btn btn--primary btn--block" for="file-input">ファイルを選ぶ</label>
         <input type="file" id="file-input" accept=".html,text/html" hidden />
         <p class="load-status" id="load-status">まだファイルが読み込まれていません。</p>
-      </div>
-      <div id="load-collapsed" class="load-collapsed" hidden>
-        <span class="load-collapsed__text" id="load-collapsed-text"></span>
-        <button type="button" class="btn btn--secondary btn--small" id="btn-load-expand">変更する</button>
       </div>
     </section>
 
@@ -238,6 +240,6 @@
   </div>
 </div>
 
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -245,16 +245,7 @@ a.btn { text-decoration: none; }
   white-space: nowrap;
 }
 
-.load-collapsed {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.load-collapsed[hidden] { display: none; }
-.load-collapsed__text {
-  flex: 1;
-  font-size: 0.92rem;
-  color: var(--color-text-sub);
+#load-collapsed-text {
   word-break: break-word;
 }
 
