@@ -560,6 +560,253 @@ function parseSavedHtml(htmlString) {
 }
 
 /* ============================================================
+ * 旧プレビュー用HTMLからの編集内容の取り込み
+ * 画像の無い形式で編集・書き出したプレビュー用HTMLには編集データ（隠しJSON）も
+ * 画像も入っていない。そこで、同じセッションを新形式で書き出した生ログを先に読み込み、
+ * プレビューの並び順・本文・削除をそこへ当てはめ、各行の表情差分画像は
+ * 対応する元の発言から引き継ぐ。
+ * ========================================================== */
+
+// プレビュー用HTMLの各行を { speaker, text, category } に分解する。
+// 画像の無い旧形式（p.ccpv-line のみ）と、吹き出し付きの現行形式の両方を扱う。
+function parsePreviewHtml(htmlString) {
+  const doc = new DOMParser().parseFromString(htmlString, "text/html");
+  const wrap = doc.querySelector(".ccpv-wrap");
+  if (!wrap) return null;
+
+  const lines = [];
+  Array.from(wrap.children).forEach((node) => {
+    if (node.classList.contains("ccpv-bubble-row")) {
+      const nameEl = node.querySelector(".ccpv-bubble-name");
+      const bubbleEl = node.querySelector(".ccpv-bubble");
+      lines.push({
+        speaker: nameEl ? extractSpanText(nameEl) : "",
+        text: bubbleEl ? extractSpanText(bubbleEl) : "",
+        category: node.classList.contains("ccpv-tab-other") ? "other" : "main",
+        isSystem: false,
+      });
+      return;
+    }
+    if (!node.classList.contains("ccpv-line")) return;
+
+    let category = "main";
+    if (node.classList.contains("ccpv-tab-info")) category = "info";
+    else if (node.classList.contains("ccpv-tab-other")) category = "other";
+    const isSystem = node.classList.contains("ccpv-system");
+
+    // 本文は「発言者名：」の後ろ。発言者名の要素を外してから取り出す
+    const clone = node.cloneNode(true);
+    const speakerEl = clone.querySelector(":scope > .ccpv-speaker");
+    let speaker = "";
+    if (speakerEl) {
+      speaker = extractSpanText(speakerEl);
+      const next = speakerEl.nextSibling;
+      if (next && next.nodeType === Node.TEXT_NODE) next.textContent = next.textContent.replace(/^：/, "");
+      speakerEl.remove();
+    }
+    lines.push({ speaker, text: extractSpanText(clone), category, isSystem });
+  });
+  return lines;
+}
+
+// 照合用に、空白・改行の違いを無視した文字列にする
+function normalizeForMatch(text) {
+  return text.normalize("NFKC").replace(/\s+/g, "");
+}
+
+// 2文字ずつの組（bigram）の重なりで、文章の似ている度合いを0〜1で返す。
+// 片方がもう片方に丸ごと含まれる場合（発言の分割・結合）も高めに評価する。
+function textSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  let containBonus = 0;
+  if (shorter.length >= 4 && longer.includes(shorter)) containBonus = 0.8;
+
+  const bigrams = (s) => {
+    const map = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      map.set(g, (map.get(g) || 0) + 1);
+    }
+    return map;
+  };
+  const ga = bigrams(a);
+  const gb = bigrams(b);
+  let overlap = 0;
+  ga.forEach((count, g) => {
+    if (gb.has(g)) overlap += Math.min(count, gb.get(g));
+  });
+  const total = Math.max(a.length - 1, 0) + Math.max(b.length - 1, 0);
+  const dice = total > 0 ? (2 * overlap) / total : 0;
+  return Math.max(dice, containBonus);
+}
+
+const PREVIEW_MATCH_WINDOW = 40;
+const PREVIEW_MATCH_THRESHOLD = 0.5;
+
+// baseMessages（新形式の生ログから読み込んだ発言）に、previewLines の並び順・本文・削除を当てはめる。
+// 戻り値の messages は previewLines と同じ順・同じ件数になる。
+function applyPreviewEdits(baseMessages, previewLines) {
+  const baseKeys = baseMessages.map((m) => normalizeForMatch(m.text));
+  const used = new Array(baseMessages.length).fill(false);
+  const matchIdx = new Array(previewLines.length).fill(-1);
+  const matchKind = new Array(previewLines.length).fill(null); // "exact" | "similar" | null
+
+  // 本文が同じ発言の候補を、本文ごとに元の順で並べておく
+  const byKey = new Map();
+  baseKeys.forEach((key, i) => {
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(i);
+  });
+  const previewKeys = previewLines.map((l) => normalizeForMatch(l.text));
+
+  // 1段階目：本文が完全に一致する発言を対応させる。
+  // 同じ本文（「……」など）が複数ある場合は、直前に対応した位置に最も近い未使用の発言を選ぶ。
+  // 発言者名を変更している可能性があるため発言者は必須条件にせず、同じ発言者を優先する。
+  let lastIdx = -1;
+  previewLines.forEach((line, p) => {
+    const candidates = (byKey.get(previewKeys[p]) || []).filter((i) => !used[i]);
+    if (candidates.length === 0 || !previewKeys[p]) return;
+    const expected = lastIdx + 1;
+    const sameSpeaker = (b) =>
+      b.isSystem ? line.isSystem || line.speaker === "system" : b.speaker === line.speaker;
+    const score = (i) => Math.abs(i - expected) + (sameSpeaker(baseMessages[i]) ? 0 : 1000);
+    const best = candidates.reduce((a, b) => (score(b) < score(a) ? b : a));
+    used[best] = true;
+    matchIdx[p] = best;
+    matchKind[p] = "exact";
+    lastIdx = best;
+  });
+
+  // 発言者名を一括変更していた場合の対応（元の名前 -> 変更後の名前）を、本文の一致した行から推定する。
+  // 同じ組み合わせが3回以上あれば名前の変更とみなす。それ以外で発言者が違う場合は、
+  // 本文が似ていても別人の画像を引き継がないようにする。
+  const pairCounts = new Map();
+  previewLines.forEach((line, p) => {
+    if (matchIdx[p] === -1) return;
+    const key = baseMessages[matchIdx[p]].speaker + "\u0000" + line.speaker;
+    pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
+  });
+  // システムメッセージは、旧プレビューでは「system」という発言者名の行として書き出されている
+  const isSameSpeaker = (base, line) => {
+    if (base.isSystem) return line.isSystem || line.speaker === "system";
+    return base.speaker === line.speaker || (pairCounts.get(base.speaker + "\u0000" + line.speaker) || 0) >= 3;
+  };
+
+  // 2段階目：本文を書き換えた行は、前後で対応の取れた位置の近くから、文章の似ている発言を探す。
+  // 1つの発言を分割した場合などに備え、既に対応済みの発言も画像の引き継ぎ元としては使ってよい。
+  previewLines.forEach((line, p) => {
+    if (matchIdx[p] !== -1) return;
+    let prev = -1;
+    for (let q = p - 1; q >= 0; q--) {
+      if (matchKind[q] === "exact") { prev = matchIdx[q]; break; }
+    }
+    let next = baseMessages.length;
+    for (let q = p + 1; q < previewLines.length; q++) {
+      if (matchKind[q] === "exact") { next = matchIdx[q]; break; }
+    }
+    const lo = Math.max(0, Math.min(prev, next) - PREVIEW_MATCH_WINDOW);
+    const hi = Math.min(baseMessages.length - 1, Math.max(prev, next) + PREVIEW_MATCH_WINDOW);
+
+    let best = -1;
+    let bestScore = 0;
+    for (let i = lo; i <= hi; i++) {
+      if (!isSameSpeaker(baseMessages[i], line)) continue;
+      let s = textSimilarity(previewKeys[p], baseKeys[i]);
+      if (!used[i]) s += 0.05;
+      if (s > bestScore) {
+        bestScore = s;
+        best = i;
+      }
+    }
+    if (best !== -1 && bestScore >= PREVIEW_MATCH_THRESHOLD) {
+      used[best] = true;
+      matchIdx[p] = best;
+      matchKind[p] = "similar";
+    }
+  });
+
+  // 対応する発言が見つからなかった行（新たに追加した地の文など）の補完用に、
+  // 発言者ごとの文字色と、タブ種別ごとのタブ名・チャンネルを元のログから拾っておく
+  const colorBySpeaker = new Map();
+  const tabByCategory = new Map();
+  baseMessages.forEach((m) => {
+    if (m.speaker && !colorBySpeaker.has(m.speaker)) colorBySpeaker.set(m.speaker, m.color);
+    if (m.isSystem) return;
+    const category = getMessageTabCategory(m);
+    if (!tabByCategory.has(category)) tabByCategory.set(category, { tab: m.tab, channel: m.channel });
+  });
+
+  const lastIconBySpeaker = new Map();
+  const counts = { exact: 0, similar: 0, unmatched: 0 };
+  const messages = previewLines.map((line, p) => {
+    const i = matchIdx[p];
+    let msg;
+    if (i !== -1) {
+      const base = baseMessages[i];
+      // 空白・改行だけの違いなら、新形式の本文（改行位置）をそのまま使う
+      const text = matchKind[p] === "exact" ? base.text : line.text;
+      const sameSpeaker = isSameSpeaker(base, line);
+      // システムメッセージと同じ本文を通常の発言者の行にしていた場合は、通常の発言として扱う
+      const isSystem = base.isSystem && sameSpeaker;
+      msg = {
+        ...base,
+        id: uid(),
+        isSystem,
+        speaker: isSystem ? "" : line.speaker || base.speaker,
+        text,
+        isDiceRoll: matchKind[p] === "exact" ? base.isDiceRoll : detectDiceRoll(text) || base.isDiceRoll,
+      };
+      if (msg.isDiceRoll && matchKind[p] !== "exact") {
+        const outcome = splitDiceOutcomeText(text);
+        msg.diceOutcome = outcome ? outcome.key : classifyDiceOutcome(text);
+      }
+      // 本文は同じでも発言者を付け替えた行は、元の発言者の画像・色を使わず、
+      // 付け替え先の発言者の直前の画像と色にする
+      if (!sameSpeaker) {
+        msg.iconId = lastIconBySpeaker.get(line.speaker) || null;
+        msg.color = colorBySpeaker.get(line.speaker) || base.color;
+      }
+      counts[matchKind[p]]++;
+    } else {
+      const tabInfo = tabByCategory.get(line.category) || { tab: `[${line.category}]`, channel: null };
+      const isDiceRoll = detectDiceRoll(line.text);
+      msg = {
+        id: uid(),
+        tab: tabInfo.tab,
+        channel: tabInfo.channel,
+        isSystem: line.isSystem,
+        speaker: line.isSystem ? "" : line.speaker,
+        color: colorBySpeaker.get(line.speaker) || DEFAULT_COLOR,
+        text: line.text,
+        isDiceRoll,
+        diceOutcome: isDiceRoll ? classifyDiceOutcome(line.text) : null,
+        // 同じ発言者の直前の行と同じ表情を使う（無ければ画像なし）
+        iconId: lastIconBySpeaker.get(line.speaker) || null,
+      };
+      counts.unmatched++;
+    }
+    if (msg.speaker && msg.iconId) lastIconBySpeaker.set(msg.speaker, msg.iconId);
+    return msg;
+  });
+
+  return { messages, counts };
+}
+
+// 取り込み後、発言者名を変更していた場合に画像の持ち主を付け替える。
+// 元の持ち主の発言が無くなり、その画像を使っているのが別の1人だけなら、その人の持ち物にする。
+function reassignImageOwners(images, messages) {
+  images.forEach((img) => {
+    const users = new Set(messages.filter((m) => m.iconId === img.id).map((m) => m.speaker));
+    if (users.size === 1 && !users.has(img.speaker) && !messages.some((m) => m.speaker === img.speaker)) {
+      img.speaker = [...users][0];
+    }
+  });
+}
+
+/* ============================================================
  * 読み込み時の自動判定（5.1・5.4章）
  * ========================================================== */
 
@@ -842,6 +1089,8 @@ const el = {
   btnCloseImagePreview: document.getElementById("btn-close-image-preview"),
 
   btnDeleteEmpty: document.getElementById("btn-delete-empty"),
+  btnImportPreview: document.getElementById("btn-import-preview"),
+  importPreviewInput: document.getElementById("import-preview-input"),
 
   bottomBar: document.getElementById("bottom-bar"),
   bottomBarLabel: document.getElementById("bottom-bar-label"),
@@ -1456,6 +1705,51 @@ function deleteEmptyMessages() {
 }
 
 el.btnDeleteEmpty.addEventListener("click", deleteEmptyMessages);
+
+// 旧プレビューの編集内容を取り込む：今読み込んでいるログ（画像付きの新形式）を土台にする
+el.btnImportPreview.addEventListener("click", () => {
+  const ok = window.confirm(
+    "今読み込んでいるログに、以前書き出したプレビュー用HTMLの並び順・本文・削除を当てはめます。\n" +
+      "表情差分画像は、対応する元の発言から引き継ぎます。\n\n" +
+      "先に、同じセッションをココフォリアから新形式（画像付き）で書き出したログを読み込んでおいてください。\n" +
+      "今の編集内容は置き換わります（元のログを読み込み直せば戻せます）。続けますか？"
+  );
+  if (!ok) return;
+  closeSidebar();
+  el.importPreviewInput.click();
+});
+
+el.importPreviewInput.addEventListener("change", () => {
+  const file = el.importPreviewInput.files[0];
+  el.importPreviewInput.value = "";
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const lines = parsePreviewHtml(String(reader.result));
+    if (!lines || lines.length === 0) {
+      window.alert("プレビュー用HTMLとして読み込めませんでした。本ツールで書き出した「プレビュー用HTML」を選んでください。");
+      return;
+    }
+    const { messages, counts } = applyPreviewEdits(state.messages, lines);
+    reassignImageOwners(state.images, messages);
+    state.messages = messages;
+    state.speakerSettings = normalizeSpeakerSettings(state.speakerSettings, messages);
+    selectedMessageId = null;
+    renderAll();
+    window.alert(
+      `「${file.name}」の編集内容を取り込みました（${messages.length} 件）。\n\n` +
+        `・本文が一致した発言：${counts.exact} 件\n` +
+        `・本文を書き換えた行（似ている発言から画像を引き継ぎ）：${counts.similar} 件\n` +
+        `・対応する発言が見つからなかった行：${counts.unmatched} 件\n` +
+        "（同じ発言者の直前の行と同じ画像を使っています）"
+    );
+  };
+  reader.onerror = () => {
+    window.alert("ファイルの読み込みに失敗しました。");
+  };
+  reader.readAsText(file, "UTF-8");
+});
 
 /* ============================================================
  * 追加・編集フォーム（5.2 3, 4, 5）
